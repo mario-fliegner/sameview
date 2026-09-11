@@ -1,6 +1,8 @@
 // path: app/src/main/java/com/isardomains/sameview/ui/wackelbild/WackelbildScreen.kt
 package com.isardomains.sameview.ui.wackelbild
 
+import android.content.Context
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectDragGestures
@@ -19,17 +21,22 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.windowsizeclass.ExperimentalMaterial3WindowSizeClassApi
 import androidx.compose.material3.windowsizeclass.WindowWidthSizeClass
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -38,14 +45,20 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.collectAsState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.CustomAccessibilityAction
+import androidx.compose.ui.semantics.SemanticsPropertyKey
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.semantics
@@ -65,6 +78,7 @@ import com.isardomains.sameview.ui.theme.SameViewAppSurface
 import com.isardomains.sameview.ui.theme.SameViewSettingsSecondaryText
 import java.io.File
 import kotlin.math.abs
+import kotlinx.coroutines.flow.Flow
 
 // Reuses CreateVideoScreen's own calibrated "media preview sharing a content column with
 // sibling controls" ratio (see CreateVideoScreen.kt's `maxCardHeight = maxHeight * 0.62f`) — not
@@ -75,6 +89,28 @@ private val DATE_BADGE_CORNER_RADIUS = 6.dp
 private val DATE_BADGE_HORIZONTAL_PADDING = 8.dp
 private val DATE_BADGE_VERTICAL_PADDING = 4.dp
 private val DATE_BADGE_IMAGE_EDGE_MARGIN = 8.dp
+
+// TODO(real-device tuning): candidate starting value pending the mandatory real-device tuning
+// pass -- see DEINWACKELBILD_IMPLEMENTATION_PLAN_V1.md §7.7/§25/§30. Deliberately small/subtle
+// per DEINWACKELBILD_INTEGRATION_V1.md §8.9 -- safer to start too subtle and tune upward.
+private const val PERSPECTIVE_MAX_ROTATION_DEGREES = 6f
+
+// TODO(real-device tuning): candidate starting value -- Compose's own DefaultCameraDistance (8f),
+// scaled by density per the standard adjustment for that otherwise-too-flat default.
+private const val PERSPECTIVE_CAMERA_DISTANCE_FACTOR = 8f
+
+// TODO(real-device tuning): ridge spacing/opacity, deliberately subtle per
+// DEINWACKELBILD_INTEGRATION_V1.md §8.10 -- not one of the four values explicitly pre-approved,
+// added here only because Kotlin requires concrete constants; equally open to real-device tuning.
+private val RIDGE_LINE_SPACING = 6.dp
+private const val RIDGE_LINE_ALPHA = 0.06f
+
+/** Test-observability-only custom semantics property carrying the current continuous preview
+ * blend fraction (§7.7). Never read by TalkBack (an unknown custom key is not announced by
+ * accessibility services) -- exists solely so instrumentation tests can assert blend dominance
+ * without a pixel-level alpha inspection API. `internal` so [WackelbildScreenTest] (same module)
+ * can read it; never referenced from [WackelbildScreenContent]'s TalkBack-facing semantics. */
+internal val PreviewBlendFractionKey = SemanticsPropertyKey<Float>("PreviewBlendFraction")
 
 /**
  * DeinWackelbild entry destination (Block 3 scope).
@@ -93,25 +129,37 @@ fun WackelbildScreen(
     windowWidthSizeClass: WindowWidthSizeClass = WindowWidthSizeClass.Compact
 ) {
     val visibleImage by viewModel.visibleImage.collectAsState()
+    val previewBlendFraction by viewModel.previewBlendFraction.collectAsState()
     val dateOverlayEnabled by viewModel.dateOverlayEnabled.collectAsState()
     val isDateOverlayAvailable by viewModel.isDateOverlayAvailable.collectAsState()
     val referenceDateBadgeText by viewModel.referenceDateBadgeText.collectAsState()
     val captureDateBadgeText by viewModel.captureDateBadgeText.collectAsState()
+    val operationState by viewModel.operationState.collectAsState()
+    val customTabOpenFailure by viewModel.customTabOpenFailure.collectAsState()
     WackelbildScreenContent(
         referenceFile = viewModel.referenceFile,
         captureFile = viewModel.captureFile,
         visibleImage = visibleImage,
+        previewBlendFraction = previewBlendFraction,
         isSensorAvailable = viewModel.isSensorAvailable,
         dateOverlayEnabled = dateOverlayEnabled,
         isDateOverlayAvailable = isDateOverlayAvailable,
         referenceDateBadgeText = referenceDateBadgeText,
         captureDateBadgeText = captureDateBadgeText,
+        operationState = operationState,
+        customTabOpenFailure = customTabOpenFailure,
+        launchCustomTabEvent = viewModel.launchCustomTabEvent,
         onDateOverlayToggled = viewModel::onDateOverlayToggled,
         onSwipeDetected = viewModel::onSwipeDetected,
         onAccessibilityToggle = viewModel::onAccessibilityToggle,
         onScreenActive = viewModel::onScreenActive,
         onScreenInactive = viewModel::onScreenInactive,
         onScreenLeft = viewModel::onScreenLeft,
+        onStartOperation = viewModel::startOperation,
+        onConfirmFallback = viewModel::confirmFallbackAndContinue,
+        onCancelOperation = viewModel::cancelOperation,
+        onCustomTabLaunchResult = viewModel::onCustomTabLaunchResult,
+        onRetryOpenCheckoutUrl = viewModel::retryOpenCheckoutUrl,
         onBack = onBack,
         windowWidthSizeClass = windowWidthSizeClass
     )
@@ -132,19 +180,31 @@ internal fun WackelbildScreenContent(
     referenceFile: File,
     captureFile: File,
     visibleImage: WackelbildImageSide,
+    previewBlendFraction: Float,
     isSensorAvailable: Boolean,
     dateOverlayEnabled: Boolean,
     isDateOverlayAvailable: Boolean,
     referenceDateBadgeText: String?,
     captureDateBadgeText: String?,
+    operationState: WackelbildOperationState,
+    customTabOpenFailure: String?,
+    launchCustomTabEvent: Flow<String>,
     onDateOverlayToggled: (Boolean) -> Unit,
     onSwipeDetected: () -> Unit,
     onAccessibilityToggle: () -> Unit,
     onScreenActive: () -> Unit,
     onScreenInactive: () -> Unit,
     onScreenLeft: () -> Unit,
+    onStartOperation: () -> Unit,
+    onConfirmFallback: () -> Unit,
+    onCancelOperation: () -> Unit,
+    onCustomTabLaunchResult: (String, Boolean) -> Unit,
+    onRetryOpenCheckoutUrl: () -> Unit,
     onBack: () -> Unit,
-    windowWidthSizeClass: WindowWidthSizeClass = WindowWidthSizeClass.Compact
+    windowWidthSizeClass: WindowWidthSizeClass = WindowWidthSizeClass.Compact,
+    onLaunchCustomTab: (Context, String) -> Boolean = { context, url ->
+        WackelbildCustomTabLauncher().launch(context, url)
+    }
 ) {
     val lifecycleOwner = LocalLifecycleOwner.current
     val currentOnScreenActive by rememberUpdatedState(onScreenActive)
@@ -170,13 +230,102 @@ internal fun WackelbildScreenContent(
         onDispose { currentOnScreenLeft() }
     }
 
+    // Collects one-shot Custom Tab launch requests and reports the real outcome back to the
+    // ViewModel. A Channel-backed Flow is consumed, not replayed -- recomposition/rotation cannot
+    // redeliver an already-consumed element (see WackelbildViewModel.launchCustomTabEvent).
+    val context = LocalContext.current
+    LaunchedEffect(launchCustomTabEvent) {
+        launchCustomTabEvent.collect { checkoutUrl ->
+            val success = onLaunchCustomTab(context, checkoutUrl)
+            onCustomTabLaunchResult(checkoutUrl, success)
+        }
+    }
+
+    val isBusy = operationState is WackelbildOperationState.Preparing ||
+        operationState is WackelbildOperationState.CreatingHandoff ||
+        operationState is WackelbildOperationState.UploadingSlot
+    val isAwaitingFallback = operationState is WackelbildOperationState.AwaitingFallbackConfirmation
+    // Editable only when there is no active/pending operation at all -- covers the whole window
+    // from CTA-tap through Ready/launch-pending/open-failure, re-enabled only on Idle or Failed.
+    val isDateToggleEditable = isDateOverlayAvailable &&
+        (operationState is WackelbildOperationState.Idle || operationState is WackelbildOperationState.Failed)
+
+    var showCancelTransferDialog by remember { mutableStateOf(false) }
+    // Dismiss automatically if the busy state ends from underneath it (mirrors CreateVideoScreen's
+    // identical `LaunchedEffect(state) { if (state !is Rendering) showCancelDialog = false }`).
+    LaunchedEffect(operationState) {
+        if (!isBusy) showCancelTransferDialog = false
+    }
+
+    fun handleBackPressed() {
+        when {
+            isAwaitingFallback -> onCancelOperation()
+            isBusy -> showCancelTransferDialog = true
+            else -> onBack()
+        }
+    }
+    BackHandler(enabled = true) { handleBackPressed() }
+
+    if (isAwaitingFallback) {
+        AlertDialog(
+            onDismissRequest = onCancelOperation,
+            title = { Text(stringResource(R.string.wackelbild_quality_fallback_title)) },
+            text = { Text(stringResource(R.string.wackelbild_quality_fallback_message)) },
+            confirmButton = {
+                TextButton(
+                    onClick = onConfirmFallback,
+                    modifier = Modifier.testTag("wackelbild_fallback_continue_button")
+                ) {
+                    Text(stringResource(R.string.wackelbild_quality_fallback_continue))
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = onCancelOperation,
+                    modifier = Modifier.testTag("wackelbild_fallback_cancel_button")
+                ) {
+                    Text(stringResource(R.string.wackelbild_quality_fallback_cancel))
+                }
+            },
+            modifier = Modifier.testTag("wackelbild_fallback_dialog")
+        )
+    }
+
+    if (showCancelTransferDialog) {
+        AlertDialog(
+            onDismissRequest = { showCancelTransferDialog = false },
+            title = { Text(stringResource(R.string.wackelbild_cancel_transfer_title)) },
+            text = { Text(stringResource(R.string.wackelbild_cancel_transfer_message)) },
+            confirmButton = {
+                TextButton(
+                    onClick = { showCancelTransferDialog = false },
+                    modifier = Modifier.testTag("wackelbild_cancel_transfer_continue_button")
+                ) {
+                    Text(stringResource(R.string.wackelbild_cancel_transfer_continue))
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = {
+                        showCancelTransferDialog = false
+                        onCancelOperation()
+                    },
+                    modifier = Modifier.testTag("wackelbild_cancel_transfer_stop_button")
+                ) {
+                    Text(stringResource(R.string.wackelbild_cancel_transfer_stop))
+                }
+            },
+            modifier = Modifier.testTag("wackelbild_cancel_transfer_dialog")
+        )
+    }
+
     Scaffold(
         topBar = {
             TopAppBar(
                 title = { Text(stringResource(R.string.wackelbild_screen_title)) },
                 navigationIcon = {
                     IconButton(
-                        onClick = onBack,
+                        onClick = { handleBackPressed() },
                         modifier = Modifier.testTag("wackelbild_back_button")
                     ) {
                         Icon(
@@ -213,6 +362,7 @@ internal fun WackelbildScreenContent(
                     referenceFile = referenceFile,
                     captureFile = captureFile,
                     visibleImage = visibleImage,
+                    previewBlendFraction = previewBlendFraction,
                     dateOverlayEnabled = dateOverlayEnabled,
                     referenceDateBadgeText = referenceDateBadgeText,
                     captureDateBadgeText = captureDateBadgeText,
@@ -236,10 +386,24 @@ internal fun WackelbildScreenContent(
                 ) {
                     WackelbildDateToggleRow(
                         checked = dateOverlayEnabled,
-                        enabled = isDateOverlayAvailable,
+                        enabled = isDateToggleEditable,
                         onCheckedChange = onDateOverlayToggled
                     )
                     WackelbildInteractionHint(isSensorAvailable = isSensorAvailable)
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Text(
+                        text = stringResource(R.string.wackelbild_transfer_disclosure),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = SameViewSettingsSecondaryText,
+                        modifier = Modifier.testTag("wackelbild_transfer_disclosure")
+                    )
+                    Spacer(modifier = Modifier.height(16.dp))
+                    WackelbildOrderArea(
+                        operationState = operationState,
+                        customTabOpenFailure = customTabOpenFailure,
+                        onStartOperation = onStartOperation,
+                        onRetryOpenCheckoutUrl = onRetryOpenCheckoutUrl
+                    )
                     Spacer(modifier = Modifier.height(16.dp))
                 }
             }
@@ -248,18 +412,124 @@ internal fun WackelbildScreenContent(
 }
 
 /**
- * Local, direct-switch Reference/Capture preview. Both files are requested unconditionally (so
- * both are decoded/cached ahead of time and switching is instant, per spec: no fade, no
- * animation), but only the currently visible one is placed in the composition. Sized from the
- * Reference image's own intrinsic aspect ratio once successfully decoded — never from session
- * metadata and never from a hardcoded fallback ratio (Reference and Capture share the same
- * aspect ratio by construction of the capture pipeline, so this stays stable across a toggle).
+ * CTA / busy / fallback-adjacent / error / Custom-Tab-open-failure area (Block 11).
+ *
+ * Collapses every busy [WackelbildOperationState] (`Preparing`, `CreatingHandoff`,
+ * `UploadingSlot(*)`, and `AwaitingFallbackConfirmation` while its own dialog is visible on top)
+ * into one undifferentiated spinner + [R.string.wackelbild_loading_preparing] presentation — no
+ * phase name, no upload slot, no percentage is ever exposed (spec §12). `Ready` is a transient
+ * sub-frame state with nothing to show (no intermediate success screen, spec §12/§14).
+ */
+@Composable
+private fun WackelbildOrderArea(
+    operationState: WackelbildOperationState,
+    customTabOpenFailure: String?,
+    onStartOperation: () -> Unit,
+    onRetryOpenCheckoutUrl: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Column(modifier = modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
+        when {
+            customTabOpenFailure != null -> {
+                Text(
+                    text = stringResource(R.string.wackelbild_custom_tab_open_failed),
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.testTag("wackelbild_custom_tab_open_failed_text")
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                Button(
+                    onClick = onRetryOpenCheckoutUrl,
+                    modifier = Modifier.testTag("wackelbild_custom_tab_open_retry_button")
+                ) {
+                    Text(stringResource(R.string.wackelbild_custom_tab_open_retry))
+                }
+            }
+            operationState is WackelbildOperationState.Preparing ||
+                operationState is WackelbildOperationState.CreatingHandoff ||
+                operationState is WackelbildOperationState.UploadingSlot ||
+                operationState is WackelbildOperationState.AwaitingFallbackConfirmation -> {
+                CircularProgressIndicator(
+                    modifier = Modifier.testTag("wackelbild_loading_spinner")
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = stringResource(R.string.wackelbild_loading_preparing),
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.testTag("wackelbild_loading_text")
+                )
+            }
+            operationState is WackelbildOperationState.Failed -> {
+                val category = operationState.failure.category
+                val errorTextRes = when (category) {
+                    WackelbildOperationFailureCategory.NETWORK_UNAVAILABLE -> R.string.wackelbild_error_no_internet
+                    WackelbildOperationFailureCategory.SERVER_TEMPORARY -> R.string.wackelbild_error_transfer_failed
+                    WackelbildOperationFailureCategory.INTEGRATION_UNAVAILABLE ->
+                        R.string.wackelbild_error_integration_unavailable
+                    WackelbildOperationFailureCategory.PREPARATION_FAILED,
+                    WackelbildOperationFailureCategory.INVALID_LOCAL_OUTPUT,
+                    WackelbildOperationFailureCategory.HANDOFF_FAILED -> R.string.wackelbild_error_preparation_failed
+                }
+                Text(
+                    text = stringResource(errorTextRes),
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.testTag("wackelbild_error_text")
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                when (category) {
+                    WackelbildOperationFailureCategory.NETWORK_UNAVAILABLE,
+                    WackelbildOperationFailureCategory.SERVER_TEMPORARY -> {
+                        Button(
+                            onClick = onStartOperation,
+                            modifier = Modifier.testTag("wackelbild_error_retry_button")
+                        ) {
+                            Text(stringResource(R.string.wackelbild_error_retry))
+                        }
+                    }
+                    else -> {
+                        Button(
+                            onClick = onStartOperation,
+                            modifier = Modifier.testTag("wackelbild_cta_button")
+                        ) {
+                            Text(stringResource(R.string.wackelbild_cta_order))
+                        }
+                    }
+                }
+            }
+            operationState is WackelbildOperationState.Ready -> {
+                // Sub-frame transient window between Ready and the launch-result callback -- no
+                // intermediate success screen, nothing to render here (spec §12/§14).
+            }
+            else -> { // Idle
+                Button(
+                    onClick = onStartOperation,
+                    modifier = Modifier.testTag("wackelbild_cta_button")
+                ) {
+                    Text(stringResource(R.string.wackelbild_cta_order))
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Local, continuously tilt-blended Reference/Capture preview (spec §8.1/§8.3, amended from the
+ * original Block 3 hard-switch design). Both files are requested unconditionally, and both
+ * painters are always simultaneously placed in the composition -- visual dominance is controlled
+ * purely by [previewBlendFraction] via complementary `alpha` (0f = full Reference, 1f = full
+ * Capture), never by conditionally composing one or the other. Also layers the preview-only
+ * lenticular ridge surface (§8.10) and, on the outer container, the preview-only perspective tilt
+ * (§8.9) -- both purely visual, never touching `reference.jpg`/`capture.jpg`/any persisted or
+ * transfer image. Sized from the Reference image's own intrinsic aspect ratio once successfully
+ * decoded — never from session metadata and never from a hardcoded fallback ratio (Reference and
+ * Capture share the same aspect ratio by construction of the capture pipeline, so this stays
+ * stable across the blend).
  */
 @Composable
 private fun WackelbildPreview(
     referenceFile: File,
     captureFile: File,
     visibleImage: WackelbildImageSide,
+    previewBlendFraction: Float,
     dateOverlayEnabled: Boolean,
     referenceDateBadgeText: String?,
     captureDateBadgeText: String?,
@@ -346,6 +616,14 @@ private fun WackelbildPreview(
                 .align(Alignment.Center)
                 .width(effectiveWidth)
                 .height(effectiveHeight)
+                // Subtle preview-only perspective tilt (spec §8.9), driven by the same
+                // continuous blend fraction as the image dominance below -- purely a visual
+                // transform on this Composable tree, never touches layout size/source geometry,
+                // so it cannot affect the upload/print pipeline (§16, §17).
+                .graphicsLayer {
+                    rotationY = (previewBlendFraction - 0.5f) * 2f * PERSPECTIVE_MAX_ROTATION_DEGREES
+                    cameraDistance = PERSPECTIVE_CAMERA_DISTANCE_FACTOR * density
+                }
                 .testTag("wackelbild_reference_preview_container")
         ) {
             Box(
@@ -395,28 +673,42 @@ private fun WackelbildPreview(
                                 true
                             }
                         )
+                        // Test-observability only -- never read by TalkBack (see
+                        // PreviewBlendFractionKey's own doc comment). The TalkBack-facing
+                        // contentDescription/customActions above remain driven solely by the
+                        // discrete visibleImage, per spec §8.7.
+                        set(PreviewBlendFractionKey, previewBlendFraction)
                     }
                     .testTag("wackelbild_preview_interactive_area"),
                 contentAlignment = Alignment.Center
             ) {
-                when (visibleImage) {
-                    WackelbildImageSide.REFERENCE -> Image(
-                        painter = referencePainter,
-                        contentDescription = null,
-                        contentScale = ContentScale.Fit,
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .testTag("wackelbild_reference_image")
-                    )
-                    WackelbildImageSide.CAPTURE -> Image(
-                        painter = capturePainter,
-                        contentDescription = null,
-                        contentScale = ContentScale.Fit,
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .testTag("wackelbild_capture_image")
-                    )
-                }
+                // Both images render simultaneously (spec §8.1) -- both painters were already
+                // unconditionally loaded above; this is pure compositing (alpha), no re-decode,
+                // no re-render per sensor update. previewBlendFraction: 0f = full Reference,
+                // 1f = full Capture (verified sign convention, not inverted -- see
+                // TiltBlendMapper's own doc comment).
+                Image(
+                    painter = referencePainter,
+                    contentDescription = null,
+                    contentScale = ContentScale.Fit,
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .alpha(1f - previewBlendFraction)
+                        .testTag("wackelbild_reference_image")
+                )
+                Image(
+                    painter = capturePainter,
+                    contentDescription = null,
+                    contentScale = ContentScale.Fit,
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .alpha(previewBlendFraction)
+                        .testTag("wackelbild_capture_image")
+                )
+                // Subtle, static, preview-only vertical lenticular ridge surface (spec §8.10),
+                // layered above both photographs. Never reads previewBlendFraction -- purely a
+                // stateless draw, independent of tilt.
+                WackelbildLenticularRidgeOverlay(modifier = Modifier.fillMaxSize())
                 // A separate wrapping Box for the 8dp image-edge margin, kept structurally apart
                 // from WackelbildDateBadge's own styling modifiers — chaining both the outer
                 // margin and the inner clip/background/padding onto one node made the badge's
@@ -438,6 +730,34 @@ private fun WackelbildPreview(
             }
         }
     }
+}
+
+/**
+ * Subtle, static, vertical lenticular ridge surface (spec §8.10) -- purely a preview-rendering
+ * layer, stateless and independent of tilt/blend. Never opens a `File`/`Bitmap` handle, so it
+ * structurally cannot reach `WackelbildPrintRenderer` or any persisted/transfer image (spec §16,
+ * §21) -- this is a plain Compose draw on the on-screen tree only. `testTag` exists only so
+ * instrumentation tests can assert its structural presence.
+ */
+@Composable
+private fun WackelbildLenticularRidgeOverlay(modifier: Modifier = Modifier) {
+    val spacingPx = with(LocalDensity.current) { RIDGE_LINE_SPACING.toPx() }
+    Box(
+        modifier = modifier
+            .testTag("wackelbild_ridge_overlay")
+            .drawBehind {
+                var x = 0f
+                while (x < size.width) {
+                    drawLine(
+                        color = Color.White.copy(alpha = RIDGE_LINE_ALPHA),
+                        start = Offset(x, 0f),
+                        end = Offset(x, size.height),
+                        strokeWidth = 1f
+                    )
+                    x += spacingPx
+                }
+            }
+    )
 }
 
 /**

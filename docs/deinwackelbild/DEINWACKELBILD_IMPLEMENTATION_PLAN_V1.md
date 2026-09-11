@@ -169,6 +169,8 @@ The preview `Box` owns 100% of the horizontal-drag gesture region and is never a
 
 # 7. Tilt / Swipe Architecture
 
+**Source-of-Truth amendment note.** `DEINWACKELBILD_INTEGRATION_V1.md` §7/§8 have been amended: the local preview no longer presents a hard Reference/Capture switch. It now requires a continuous tilt-driven blend (spec §8.1/§8.3), a subtle perspective tilt effect (spec §8.9), and a subtle vertical lenticular ridge overlay (spec §8.10), while preserving deterministic full-endpoint behavior for manual swipe/accessibility selection (spec §8.4/§8.5/§8.7) and the existing sensor-lifecycle/privacy rules (spec §8.8) unchanged. §7.1, §7.2, §7.4, and §7.6 below remain accurate as shipped. §7.3 is revised to reclassify what is now a narrower, still-required role rather than the primary visual mechanism. §7.7 documents the additional work this implies, without prematurely implementing it. (Note: bare `§8.x`/`§9`/`§16`/`§17` elsewhere in this document refer to this plan's own sections, e.g. Date Overlay Architecture (§8), HQ Print Image Architecture (§9), Custom Tab Integration (§16), Localization (§17) — this note and the rest of §7 consistently write `spec §N` when referring to `DEINWACKELBILD_INTEGRATION_V1.md` instead, per this document's existing convention, e.g. §7.4/§7.5 below.)
+
 ## 7.1 Sensor choice
 
 **Decision: `Sensor.TYPE_ROTATION_VECTOR`**, read via a new `TiltProvider` class parallel to (not a subclass of, and not touching) `CompassProvider`.
@@ -193,13 +195,13 @@ open class TiltProvider internal constructor(private val sensorManager: SensorMa
 
 Internally, the `SensorEventListener` body is the same rotation-matrix + `remapCoordinateSystem` sequence as `CompassProvider.kt:30-66`, with one difference: after `SensorManager.getOrientation(adjustedMatrix, orientationAngles)`, this class reads `orientationAngles[2]` (roll, the left/right tilt axis) instead of `orientationAngles[0]` (azimuth, compass heading) — the only functional delta from `CompassProvider`. This is written as a **narrow duplicate**, not a shared base class or shared listener extraction: the two providers serve different products (GPS Recreation Guidance vs. DeinWackelbild) with independent lifecycles and independent futures; sharing a base class would couple their evolution for a ~40-line class with one line of difference in what's read from an already-computed array. `CompassProvider.kt` is not modified.
 
-## 7.3 Neutral position, thresholds, hysteresis, swipe/sensor arbitration
+## 7.3 Neutral position, thresholds, hysteresis, swipe/sensor arbitration (revised — see amendment note above)
 
-- **Neutral position:** captured as `neutralRoll = firstRollReadingAfterActivation` inside `WackelbildViewModel`, not inside `TiltProvider` itself (keeps the provider a pure sensor wrapper, consistent with `CompassProvider`'s separation of raw-sensor delivery from `CameraViewModel`'s guidance logic). Every subsequent reading is compared as `delta = currentRoll - neutralRoll` (angle-wrapped).
-- **Direct switch rule:** `delta > +THRESHOLD_DEGREES` → show Capture; `delta < -THRESHOLD_DEGREES` → show Reference; direction sign convention validated against display rotation the same way `CompassProvider` already validates azimuth (both go through the same remap table, so "left tilt" stays intuitive across rotation exactly as spec §8.3 requires).
-- **Hysteresis:** switching back requires crossing a *smaller* re-arm band around neutral (e.g., must return within `±REARM_DEGREES` of neutral before the opposite threshold can fire again) — a standard two-band hysteresis state machine (`TiltHysteresisState: NEUTRAL | TOWARD_CAPTURE | TOWARD_REFERENCE`), implemented as a small pure class `TiltHysteresisStateMachine` for unit testability, separate from `TiltProvider` (which stays a raw sensor wrapper) and separate from the ViewModel (which owns *which image is visible*, not the hysteresis math).
-- **Exact degree constants — locked, implemented (Block 5B Correction D†):** Block 3 shipped with `THRESHOLD_DEGREES = 9f`, `REARM_DEGREES = 6f` (tuned down from an initial `12f` placeholder during Block 3C's real-device validation pass, per `docs/IMPLEMENTATION_NOTES.md`). These are the current, committed, non-placeholder values in `TiltHysteresisStateMachine.kt`. This paragraph previously described `12f`/`6f` as an untuned placeholder; that is now stale and is corrected here.
-- **Swipe/sensor arbitration (§8.5 of the spec):** the ViewModel holds `lastInputSource: InputSource { SENSOR, SWIPE }` and `swipeOverrideActive: Boolean`. On a manual swipe, `swipeOverrideActive = true` and the displayed image is set directly; the tilt-hysteresis state machine keeps running (so it doesn't miss real device movement) but its output is **ignored** by the ViewModel while `swipeOverrideActive` is true. `swipeOverrideActive` is cleared the next time the hysteresis state machine reports a **state transition** relative to its state *at the moment the override began* (i.e., "a new sufficiently clear tilt movement," per spec §8.5) — not merely a new reading. This is genuinely new state-machine logic (Gate 1 confirmed no precedent exists) but is fully unit-testable in isolation from Compose/sensors since it operates purely on a stream of hysteresis-state values and swipe events.
+- **Neutral position:** captured as `neutralRoll = firstRollReadingAfterActivation` inside `WackelbildViewModel`, not inside `TiltProvider` itself (keeps the provider a pure sensor wrapper, consistent with `CompassProvider`'s separation of raw-sensor delivery from `CameraViewModel`'s guidance logic). Every subsequent reading is compared as `delta = currentRoll - neutralRoll` (angle-wrapped). **Reusable, unchanged** by the Source-of-Truth amendment.
+- **Direct switch rule — obsolete as the visual mechanism, per the amended Source-of-Truth.** `delta > +THRESHOLD_DEGREES` → show Capture; `delta < -THRESHOLD_DEGREES` → show Reference was Block 3's shipped behavior. This is no longer the rule that determines what is rendered (spec §8.1 now requires a continuous blend, see §7.7). The direction sign convention itself (validated against display rotation the same way `CompassProvider` already validates azimuth) remains correct and reusable for whatever new continuous mapping is built.
+- **Hysteresis — reusable for its narrower remaining role.** The existing two-band hysteresis state machine (`TiltHysteresisState: NEUTRAL | TOWARD_CAPTURE | TOWARD_REFERENCE`, `TiltHysteresisStateMachine`) is no longer the primary driver of visual presentation, but its discrete output is still required for the accessibility semantic identity (spec §8.7) and for the sensor/manual arbitration re-arm principle (spec §8.5) — both of which the amended Source-of-Truth explicitly preserves. It remains a small, pure, unit-testable class, separate from `TiltProvider` and from the ViewModel.
+- **Exact degree constants — locked values, role narrowed.** `THRESHOLD_DEGREES = 9f`/`REARM_DEGREES = 6f` (`TiltHysteresisStateMachine.kt`, tuned during Block 3C's real-device validation pass, per `docs/IMPLEMENTATION_NOTES.md`) remain the committed values for the discrete accessibility/arbitration state machine above. They are **not** assumed to also be the correct constants for the new continuous blend's mapping curve/useful-max-tilt/filtering — those are separate, currently open real-device tuning parameters (§7.7, §25, §30).
+- **Swipe/sensor arbitration (§8.5 of the spec) — architecture preserved.** The ViewModel holds `lastInputSource: InputSource { SENSOR, SWIPE }` and `swipeOverrideActive: Boolean`. On a manual swipe or accessibility selection, `swipeOverrideActive = true` and the displayed endpoint is set directly (full Reference or full Capture, per spec §8.4/§8.7); the tilt-hysteresis state machine keeps running (so it doesn't miss real device movement) but its output is **ignored** by the ViewModel while `swipeOverrideActive` is true. `swipeOverrideActive` is cleared the next time the hysteresis state machine reports a **state transition** relative to its state *at the moment the override began* — not merely a new reading. This state-machine logic and its unit-testability are unchanged; only what the resulting state now *drives* (§7.7's continuous rendering, in addition to the existing discrete uses) is new.
 
 ## 7.4 Lifecycle registration
 
@@ -212,6 +214,24 @@ Cloned pattern from `CameraViewModel`'s `updateSensorActivation()`/`onCameraScre
 ## 7.6 No-runtime-permission verification
 
 Verified by direct manifest inspection (§2) — no motion-sensor permission exists in the app today and none is added by this feature; `TiltProvider.isAvailable()`/`startUpdates()` never call any permission-check API, mirroring `CompassProvider`'s existing behavior exactly. A unit test (`TiltProviderTest`) asserts `startUpdates()` calls `SensorManager.registerListener` directly with no intervening permission check, using a mocked `SensorManager` (`mockito-kotlin`, already a project test dependency).
+
+## 7.7 Preview contract amendment — required Block 3 revision
+
+This section documents the work required to bring Block 3 back into compliance with the amended `DEINWACKELBILD_INTEGRATION_V1.md` §8.1/§8.3/§8.9/§8.10. It describes required behavior, not a locked implementation — exact class/file names, mapping formulas, and tuning constants are implementation-time decisions.
+
+**Continuous preview value (new, required).** The existing `delta = currentRoll - neutralRoll` stream (§7.3) must additionally feed a normalized, clamped continuous value suitable for driving Reference/Capture visual dominance: approximately 50/50 at `delta ≈ 0`, progressing monotonically toward the corresponding full endpoint as useful tilt increases, with filtering/smoothing/dead-zone damping so sensor noise around a stable orientation does not produce visible flicker. This is additive to, not a replacement of, the existing hysteresis state machine (§7.3), which keeps its narrower accessibility/arbitration role. The exact mapping curve, useful maximum tilt, and filtering constants are open real-device tuning parameters (§25, §30), not normative UX values — the `9f`/`6f` hysteresis constants are not assumed to carry over.
+
+**Preserving discrete semantics (required).** The continuous value must not eliminate the discrete `TiltHysteresisState`/`swipeOverrideActive` machinery, which remains the mechanism for: manual swipe/accessibility endpoint selection (spec §8.4/§8.7), accessibility semantic identity (spec §8.7, already correctly implemented per §20), and sensor/manual arbitration re-arm (spec §8.5, §7.3). The smallest-architecture expectation is two consumers of the same underlying tilt-delta stream — the existing discrete state machine, and a new continuous mapping — not a redesign of either.
+
+**Rendering both images (new, required).** The preview must render both already-loaded Reference/Capture painters in the same preview area simultaneously, with visual dominance controlled continuously by the new value above. This must not: decode/resize bitmaps on every sensor update (the painters are already loaded once, per the existing implementation); write the blended result to disk; or route the visual blend through `WackelbildPrintRenderer`/the print/upload pipeline (§9; spec §16) in any way — the blend is a preview-rendering-layer-only concern.
+
+**Lenticular ridge overlay (new, required).** A lightweight, static, preview-only vertical ridge surface (spec §8.10) layered over the preview, independent of and subordinate to the photographs, and independent of persisted image data — it must never be reachable from `WackelbildPrintRenderer` or any file-writing code path.
+
+**Perspective tilt (new, required).** A subtle preview-layer visual transform (spec §8.9), driven by the same continuous tilt direction/value as the image blend above, making the side rotating away from the viewer appear slightly smaller/compressed. Illustrative, non-binding possibilities consistent with this document's existing technical level include a Compose `graphicsLayer` transform (e.g. `rotationY`/`cameraDistance`) or an equivalent minimal visual-only technique — no specific API is mandated, and the plan does not lock the implementation to one if another minimal approach proves simpler. This must remain visual-only and must never alter the layout/source geometry consumed by the upload/output pipeline (§9; spec §16, §17).
+
+**Manual interaction (revised).** Manual Reference selection → full Reference endpoint (~100/0); manual Capture selection → full Capture endpoint (~0/100); no ambiguous intermediate manual state (spec §8.4/§8.7). Sensor control must not immediately override the manual endpoint due to noise — the existing neutral/re-arm arbitration principle (§7.3; spec §8.5) is preserved unchanged unless implementation analysis proves a minimal adjustment is required; this plan does not propose one.
+
+**No Blickwinkel control (confirmed, unchanged).** Nothing in this plan, before or after this amendment, proposes a viewing-angle slider/bar or a second manual angle-control mechanism (`DEINWACKELBILD_INTEGRATION_V1.md` §55). The phone tilt (§7.1-§7.3) and the existing swipe/accessibility fallback (spec §8.4/§8.7) remain the only interactive preview mechanisms.
 
 ---
 
@@ -702,57 +722,61 @@ data class HandoffState(
 
 Idempotency key is generated once per **user-visible operation** (fresh UUID at the moment "Bestelle dein Wackelbild" is pressed) and reused across automatic retries of that same operation; a new explicit press after a completed/abandoned flow generates a new key (spec §15/§26). **Confirmed `Idempotency-Key` format (Block 7B doc sync):** required on every create request; 8–100 characters; allowed characters `[A-Za-z0-9._-]` (letters, digits, `.`, `_`, `-`); a repeated create request with the same still-valid key returns the same handoff rather than creating a new one. Generating a value satisfying this format, retaining it across retries, and deciding when to regenerate it all remain Block 8 responsibilities — Block 7's client only accepts an already-generated key as a parameter and places it correctly on the wire.
 
-## 14.3 ViewModel-level operation state
+## 14.3 ViewModel-level operation state (Block 11 correction — supersedes the original design below)
 
-`WackelbildViewModel` distinguishes internal operation phase from the small user-visible state the product UX actually shows (one spinner state, not backend phases — spec §12):
+**Correction — the design originally described in this section (an internal `WackelbildOperationPhase` sealed class with `PreparingHq`/`PreparingFallback`/`ReadyToOpen`/`OpenFailedWithCheckoutUrl`/`RetryableError`/`PermanentError`/`Cancelled` variants, plus derived `isBusy`/`showFallbackWarning`/`userVisibleError` `StateFlow`s) was never implemented.** Block 8 shipped a materially simpler `WackelbildOperationState` sealed interface, and Block 11 builds directly on it rather than resurrecting the design below. This section now documents what actually exists.
+
+`WackelbildOperationState.kt` (unchanged since Block 8, not modified by Block 11):
 
 ```kotlin
-internal sealed class WackelbildOperationPhase {
-    object Idle : WackelbildOperationPhase()
-    object PreparingHq : WackelbildOperationPhase()
-    data class FallbackConfirmationNeeded(val pair: WackelbildPrintPair) : WackelbildOperationPhase()
-    object PreparingFallback : WackelbildOperationPhase()
-    object CreatingHandoff : WackelbildOperationPhase()
-    data class UploadingSlot(val slot: Slot) : WackelbildOperationPhase()
-    data class ReadyToOpen(val checkoutUrl: String) : WackelbildOperationPhase()
-    data class OpenFailedWithCheckoutUrl(val checkoutUrl: String) : WackelbildOperationPhase()
-    data class RetryableError(val classification: DeinWackelbildErrorClassification) : WackelbildOperationPhase()
-    object PermanentError : WackelbildOperationPhase()
-    object Cancelled : WackelbildOperationPhase()
+sealed interface WackelbildOperationState {
+    data object Idle : WackelbildOperationState
+    data object Preparing : WackelbildOperationState
+    data object AwaitingFallbackConfirmation : WackelbildOperationState
+    data object CreatingHandoff : WackelbildOperationState
+    data class UploadingSlot(val slot: DeinWackelbildSlot) : WackelbildOperationState
+    data class Ready(val checkoutUrl: String, val usedFallback: Boolean) : WackelbildOperationState
+    data class Failed(val failure: WackelbildOperationFailure) : WackelbildOperationState
 }
-
-// User-visible collapse:
-val isBusy: StateFlow<Boolean>            // true for PreparingHq/PreparingFallback/CreatingHandoff/UploadingSlot*
-val showFallbackWarning: StateFlow<WackelbildPrintPair?>   // non-null only for FallbackConfirmationNeeded
-val userVisibleError: StateFlow<WackelbildUserError?>      // maps RetryableError/PermanentError → the small approved copy set (§18)
 ```
 
-`isBusy` is the only signal `WackelbildScreen` reads to decide "show spinner + Wackelbild wird vorbereitet …" — it does not branch UI on `PreparingHq` vs. `CreatingHandoff` vs. `UploadingSlot(ONE)` vs. `UploadingSlot(TWO)` (spec §12: no "image 1 of 2", no phase text). The full sealed class exists purely for internal correctness/testability (each phase transition is independently unit-testable) and cancellation targeting.
+There is no separate `isBusy`/`showFallbackWarning`/`userVisibleError` `StateFlow` on the ViewModel — `WackelbildScreen` derives the collapsed busy presentation, the fallback-dialog visibility, and the error-copy mapping directly from `operationState` via plain `when` branches (spec §12's "one spinner state, not backend phases" is satisfied by construction: `Preparing`/`CreatingHandoff`/`UploadingSlot(*)`/`AwaitingFallbackConfirmation` all render the identical spinner + `wackelbild_loading_preparing` copy, with no phase name, slot, or percentage ever surfaced).
 
-### Foreground / Custom Tab return distinction (Correction C)
+### Custom Tab launch bookkeeping (Block 11) — minimal in-memory additions, no second state machine
 
-Generic `ON_RESUME` (e.g., returning from Home, another app, or the notification shade) must not be confused with returning specifically from a launched Custom Tab. The ViewModel adds an explicit ephemeral marker:
+Rather than the `ReadyToOpen`/`OpenFailedWithCheckoutUrl` phases and `CustomTabAwaitState` enum originally proposed as part of an unbuilt parallel `WackelbildOperationPhase`, Block 11 adds a small set of private fields directly on `WackelbildViewModel`, layered on top of the real `WackelbildOperationState` above:
 
 ```kotlin
 internal enum class CustomTabAwaitState { NOT_LAUNCHED, LAUNCHED_AWAITING_RETURN }
+
+private var customTabAwaitState = CustomTabAwaitState.NOT_LAUNCHED
+private var isScreenForeground = false
+private var pendingCheckoutUrl: String? = null          // Ready reached while backgrounded
+
+private val _launchCustomTabEvent = Channel<String>(Channel.BUFFERED)  // same convention as ShareComparisonEvent/CreateVideoEvent
+val launchCustomTabEvent: Flow<String> = _launchCustomTabEvent.receiveAsFlow()
+
+private val _customTabOpenFailure = MutableStateFlow<String?>(null)    // non-null while a launch failed and the URL is retained for retry-open
+val customTabOpenFailure: StateFlow<String?> = _customTabOpenFailure.asStateFlow()
 ```
 
-Required behavior, all backed by this single piece of state (no persistent storage, no new phase needed in `WackelbildOperationPhase`):
+`isScreenForeground` is set inside the **existing** `onScreenActive()`/`onScreenInactive()` lifecycle hooks (already wired since Block 3 for the tilt sensor) — no new lifecycle observation was added. Required behavior:
 
-- **Normal background/resume during `PreparingHq`/`PreparingFallback`/`CreatingHandoff`/`UploadingSlot`:** `CustomTabAwaitState` remains `NOT_LAUNCHED`. `ON_RESUME` does nothing to the operation phase, the visible image, or the date-toggle editability — the active operation continues exactly as before backgrounding (§19).
-- **Upload finishes while SameView is backgrounded:** the phase transitions to `ReadyToOpen(checkoutUrl)` as normal, but the `LaunchCustomTab` event is only *collected* once the screen is actually resumed in the foreground — the ViewModel does not launch anything itself; launching is a screen-side effect (§14.4/§16) that can only fire while the screen is composed and visible. The `checkoutUrl` sits in the `ReadyToOpen` phase's ephemeral state in the meantime — no separate storage needed.
-- **Actual Custom Tab launch:** immediately before invoking `WackelbildCustomTabLauncher.launch()`, the ViewModel sets `CustomTabAwaitState = LAUNCHED_AWAITING_RETURN`.
-- **Actual resume after a Custom Tab launch:** the `ON_RESUME` observer checks `CustomTabAwaitState`; only when it reads `LAUNCHED_AWAITING_RETURN` does the approved return-reset run (Reference visible, date toggle editable again with its retained value, normal CTA shown again, no order-status inference — spec §14) — and `CustomTabAwaitState` is immediately reset to `NOT_LAUNCHED` afterward so a *second* unrelated resume later in the same screen visit does not repeat the reset.
+- **Normal background/resume during `Preparing`/`CreatingHandoff`/`UploadingSlot(*)`/`AwaitingFallbackConfirmation`:** `customTabAwaitState` remains `NOT_LAUNCHED`. `onScreenActive()`/`onScreenInactive()` only update `isScreenForeground`; the active operation, the visible image, and the date-toggle editability are all untouched.
+- **`Ready` reached while backgrounded:** `startOperation()`'s coroutine calls `requestCustomTabLaunch(checkoutUrl)`, which checks `isScreenForeground`; if false, the URL is stored in `pendingCheckoutUrl` rather than sent to the channel — the launch is never fired from the background.
+- **Screen resumes:** `onScreenActive()` unconditionally checks `pendingCheckoutUrl` first and, if non-null, sends it to `_launchCustomTabEvent` and clears the field — this runs ahead of the sensor-specific logic in the same method (which early-returns when no sensor exists), so foreground tracking and deferred-launch delivery happen on every resume regardless of tilt-sensor availability.
+- **Actual Custom Tab launch:** performed by the Screen (which owns `Context`), not the ViewModel — `WackelbildScreenContent` collects `launchCustomTabEvent` via `LaunchedEffect`, calls the launcher, and reports the outcome back via `onCustomTabLaunchResult(checkoutUrl, success)`.
+- **Launch succeeds:** `customTabAwaitState = LAUNCHED_AWAITING_RETURN`, `_customTabOpenFailure.value = null`, and `operationState` is reset to `Idle` immediately (no intermediate success screen — the Custom Tab itself is now what's visible, spec §12/§14).
+- **Launch fails:** `_customTabOpenFailure.value = checkoutUrl` (retained for a same-URL retry-open via `retryOpenCheckoutUrl()`, which re-sends the identical URL through the same channel — no re-render, no new handoff, no re-upload). `customTabAwaitState` stays `NOT_LAUNCHED`.
+- **Actual resume after a successful Custom Tab launch:** `onScreenActive()` checks `customTabAwaitState`; only when it reads `LAUNCHED_AWAITING_RETURN` does the return-reset run (visible image reset to Reference; date-toggle editability follows automatically since `operationState` is already `Idle`; normal CTA shown again; no order-status inference) — and the marker is cleared immediately so a later unrelated resume in the same screen visit is a no-op.
 
 ## 14.4 Cancellation and one-shot events
 
-A `CancellationToken`-style `Job` held by the ViewModel for the active prepare/upload coroutine; the Back-confirmation dialog's "Abbrechen" action calls `job.cancel()`, which — via the `finally`/`NonCancellable`-wrapped cleanup (§11) — always runs temp-file deletion regardless of which phase was interrupted.
-
-One-shot events (`Channel`-based, same convention as `ShareComparisonEvent`/`CreateVideoEvent`): `LaunchCustomTab(url)` — emitted once the handoff reaches `ready` with a non-null `checkoutUrl` **and** the screen is actually resumed in the foreground (a `Channel` naturally buffers the event if the screen is backgrounded when `ready` is reached, so the event is safely delivered exactly once the screen next resumes, never launching a browser while SameView itself is still backgrounded — see the Foreground/Custom-Tab-return distinction above and §16 for the full launch mechanics).
+Unchanged from the original design: the Back-confirmation dialog's "Abbrechen" action calls `WackelbildViewModel.cancelOperation()`, which cancels `operationJob` — via the `finally`/`NonCancellable`-wrapped cleanup (§11) this always runs temp-file deletion regardless of which phase was interrupted. `launchCustomTabEvent` (§14.3 above) is the one-shot event, `Channel`-based, same convention as `ShareComparisonEvent`/`CreateVideoEvent` — a buffered `Channel` naturally holds an element until the next collector read, so no element is lost across a recomposition or rotation, and none is ever redelivered once consumed.
 
 ## 14.5 Process recreation behavior
 
-None of `WackelbildOperationPhase`, `dateOverlayEnabled`, or the tilt/swipe display state survive process death (all plain `MutableStateFlow`/in-memory, no `SavedStateHandle` beyond `sessionId`) — matching spec §24/§25's explicit "do not persist handoff state" / "the user may explicitly start a new handoff later."
+None of `operationState`, `customTabAwaitState`, `pendingCheckoutUrl`, `customTabOpenFailure`, `dateOverlayEnabled`, or the tilt/swipe display state survive process death (all plain fields/`MutableStateFlow`, in-memory only, no `SavedStateHandle` beyond `sessionId`) — matching spec §24/§25's explicit "do not persist handoff state" / "the user may explicitly start a new handoff later."
 
 ## 14.6 Error/outcome mapping
 
@@ -953,8 +977,8 @@ String resources for each state are listed in §17.1 above (no additional dialog
 | `app/src/main/res/values/strings.xml`, `values-de/strings.xml` | Modify | 1, 4, 5, 7 | New string resources (§17.1) | Low |
 | `app/src/main/java/com/isardomains/sameview/ui/wackelbild/WackelbildScreen.kt` | Create | 2, 3, 4 | ✅ **Implemented.** Screen shell, layout, Back handling, tilt/swipe gesture region (Block 3), Compose date-badge UI (Block 4, `WackelbildDateBadge`) — the gesture region and badge live here directly, not in separate files (Correction D) | Medium |
 | `app/src/main/java/com/isardomains/sameview/ui/wackelbild/WackelbildViewModel.kt` | Create | 2, 3, 4, 8, 9 | ✅ **Implemented (through Block 4).** Full state model (§14.3-§14.5); Block 5 does not modify this file | Medium — grows across blocks |
-| `app/src/main/java/com/isardomains/sameview/ui/wackelbild/TiltProvider.kt` | Create | 3 | ✅ **Implemented.** Sensor wrapper (§7.2) | Low — narrow, isolated, modeled on proven `CompassProvider` |
-| `app/src/main/java/com/isardomains/sameview/ui/wackelbild/TiltHysteresisStateMachine.kt` | Create | 3 | ✅ **Implemented.** Pure hysteresis/arbitration logic (§7.3), `THRESHOLD_DEGREES=9f`/`REARM_DEGREES=6f` locked | Medium — genuinely new logic, no precedent |
+| `app/src/main/java/com/isardomains/sameview/ui/wackelbild/TiltProvider.kt` | Create | 3 | ✅ **Implemented, reusable unchanged.** Raw sensor wrapper (§7.2) — unaffected by the §7.7 preview-contract amendment | Low — narrow, isolated, modeled on proven `CompassProvider` |
+| `app/src/main/java/com/isardomains/sameview/ui/wackelbild/TiltHysteresisStateMachine.kt` | Create | 3 | ✅ **Implemented, reusable for a narrower role.** Pure hysteresis/arbitration logic (§7.3), `THRESHOLD_DEGREES=9f`/`REARM_DEGREES=6f` locked — now used for accessibility semantic identity/manual arbitration only, no longer the primary driver of visual presentation (§7.7) | Medium — genuinely new logic, no precedent |
 | `app/src/main/java/com/isardomains/sameview/ui/wackelbild/DateBadgeFormatter.kt` | Create | 4 | ✅ **Implemented.** Pure date-text formatting (§8.1) — replaces the originally-planned `DateBadgeGeometry.kt`/`DateBadgeOverlay.kt`, which were never created (Correction D) | Low |
 | `app/src/main/java/com/isardomains/sameview/ui/wackelbild/WackelbildTempFileManager.kt` | Create | 5, 6 | `cacheDir` **creation side only** in Block 5; full lifecycle (cleanup paths, sweep) in Block 6 (§11 Correction L) | Medium |
 | `app/src/main/java/com/isardomains/sameview/image/ShareImageRenderer.kt` | Modify | 5 | Widen exactly **3** `private`→`internal` methods (`decodeHqCapture`, `renderHqReference`, `decodeReferenceFallback`) — `prepareHqCaptureForSbs` stays `private`, not needed (§9.2 Correction B) — **no logic change** | **High file, Low change-risk** |
@@ -1018,9 +1042,10 @@ Ordered to minimize regression risk: pure-UI/navigation shell first (fully testa
 - **Manual validation:** open screen from menu, confirm no network request occurs (spec §6/§23 — verifiable via Android Studio's Network Profiler showing zero traffic).
 - **Stop/gate criteria:** screen opens fully offline, Back works, layout matches Compact/Medium/Expanded rules; no temporary/stub architecture remains anywhere in the codebase.
 
-## Block 3 — Tilt/swipe interaction — ✅ implemented
+## Block 3 — Tilt/swipe interaction
 - **Objective:** `TiltProvider`, `TiltHysteresisStateMachine`, swipe gesture, arbitration, sensor-unavailable fallback hint.
-- **Files (corrected, Correction D):** `TiltProvider.kt`, `TiltHysteresisStateMachine.kt`, `WackelbildScreen.kt` (gesture region — no separate `WackelbildPreview.kt` file was created), `WackelbildViewModel.kt` (extended).
+- **Status — reusable infrastructure implemented; visual presentation requires revision against the amended Source-of-Truth (§7.7).** The original Block 3 shipped and remains correct for: `TiltProvider` (§7.1/§7.2), sensor lifecycle registration/unregistration (§7.4), neutral-roll calibration (§7.3), device-rotation handling, the manual swipe fallback gesture, the accessibility toggle, the accessibility semantic identity (§20), and the sensor/manual arbitration + neutral/re-arm principle (§7.3; spec §8.5). What is now obsolete as the *target* architecture is the hard visual Reference/Capture switch itself — `DEINWACKELBILD_INTEGRATION_V1.md` §8.1/§8.3/§8.9/§8.10 now require a continuous tilt-driven blend, a subtle perspective tilt effect, and a subtle lenticular ridge overlay (see §7.7 for the required additional work). Block 3 is not considered fully implemented against the current Source-of-Truth until that work is done.
+- **Files (corrected, Correction D):** `TiltProvider.kt`, `TiltHysteresisStateMachine.kt`, `WackelbildScreen.kt` (gesture region — no separate `WackelbildPreview.kt` file was created), `WackelbildViewModel.kt` (extended). **Additional revision required (§7.7):** the preview-rendering region of `WackelbildScreen.kt` (continuous blend rendering, ridge overlay, perspective transform) and `WackelbildViewModel.kt` (continuous mapped value); whether this needs a new dedicated file is a production-implementation decision, not made here.
 - **Regression risk:** Medium (genuinely new arbitration logic, no precedent).
 - **Test commands:** `testDebugUnitTest` (hysteresis/arbitration pure-logic tests), `connectedDebugAndroidTest` (swipe instrumentation).
 - **Manual validation:** real-device tilt/swipe feel — completed in Block 3C, locked at `THRESHOLD_DEGREES=9f`/`REARM_DEGREES=6f` (§7.3 Block 5B Correction D†).
@@ -1138,7 +1163,8 @@ Dependencies between blocks are respected throughout: no block that requires `IN
 
 ## 24.1 Unit tests (JVM, `testDebugUnitTest`)
 
-- Tilt threshold/hysteresis transitions (`TiltHysteresisStateMachineTest`) — every state-transition edge, including the boundary values around the locked `9f`/`6f` constants (§7.3 Block 5B Correction D†).
+- Tilt threshold/hysteresis transitions (`TiltHysteresisStateMachineTest`) — every state-transition edge, including the boundary values around the locked `9f`/`6f` constants (§7.3 Block 5B Correction D†); this now validates the accessibility/arbitration role only, not the visual presentation (§7.7).
+- **New, required (§7.7):** continuous blend mapping — approximately 50/50 at neutral, monotonic progression in both directions, clamping at the useful-tilt endpoints, damped/stable behavior against synthetic sensor noise around neutral, and correct interaction with `swipeOverrideActive`/manual override and re-arm (i.e. the continuous value is not driven by the sensor while a manual override is active, consistent with §7.3's existing arbitration test coverage below).
 - Relative neutral-position capture and angle-wrap delta math.
 - Display-rotation mapping for `TiltProvider` (mirrors the existing `remapCoordinateSystem` table, tested with a mocked `SensorManager`, §7.6).
 - Swipe/sensor arbitration (`swipeOverrideActive` set/clear transitions, §7.3).
@@ -1176,6 +1202,9 @@ Dependencies between blocks are respected throughout: no block that requires `IN
 - Navigation to the Wackelbild screen and Back.
 - Date-toggle default (OFF) and disabled state (no usable Reference date).
 - Preview initial Reference-visible state.
+- **New, required (§7.7):** both Reference and Capture painters coexist/are simultaneously present in the preview composition (not mutually exclusive as before), with correct relative dominance assertable at controlled/injected blend-state values.
+- **New, required (§7.7):** manual swipe/accessibility selection deterministically resolves to the full Reference or full Capture endpoint (never an intermediate blend value), and sensor control does not immediately override the resulting endpoint due to noise (re-arm principle, §7.3; spec §8.5).
+- **New, required (§7.7):** the lenticular ridge overlay and perspective transform remain preview-only — covered by the existing persisted-file-immutability/metadata-clean assertions above (`image_one.jpg`/`image_two.jpg` byte content is unaffected) — and the perspective transform does not crash or push preview content outside its own bounds at the useful-tilt extremes.
 - Swipe toggling (with and without a mocked sensor).
 - Loading state (spinner + single copy string, no phase text, no percentage).
 - Home/background during active upload does not reset the screen, does not re-enable the date toggle, and does not simulate a Custom Tab return (`CustomTabAwaitState` remains `NOT_LAUNCHED`, §14.3).
@@ -1208,7 +1237,8 @@ No lint baseline is introduced, no test is disabled, and no failure is suppresse
 
 The following cannot be verified by Gradle/CI and must be checked on physical hardware before release:
 
-- ~~Tilt thresholds/hysteresis final tuning~~ — **already completed** in Block 3C; `THRESHOLD_DEGREES=9f`/`REARM_DEGREES=6f` are locked, non-placeholder values (§7.3 Block 5B Correction D†). Retained here only as a historical checklist item.
+- ~~Tilt thresholds/hysteresis final tuning~~ — **already completed** in Block 3C; `THRESHOLD_DEGREES=9f`/`REARM_DEGREES=6f` are locked, non-placeholder values (§7.3 Block 5B Correction D†) for the accessibility/arbitration role. Retained here only as a historical checklist item for that narrower role.
+- **New, open (§7.7):** continuous blend real-device validation — calibrated neutral ≈ 50/50, smooth continuous transition in both directions with no hard visual switch during normal tilt, no visible flicker while holding the phone still, correct tilt direction; perspective effect feels physically natural, correct direction, and remains subtle; lenticular ridges are visible but unobtrusive; all of the above re-checked in Portrait, in Landscape/after display rotation, and after leaving and re-entering the screen; manual swipe/accessibility fallback and sensor/manual re-arm behavior remain correct under the new rendering; date overlay remains visually correct together with the new blend/ridge/perspective layers; uploaded/prepared `image_one.jpg`/`image_two.jpg` byte content remains unaffected by these preview-only effects.
 - Portrait device orientation — preview, gestures, and date badge all remain correct.
 - Landscape device orientation — same, plus Compact-height scroll behavior (§6.3).
 - Sensor-unavailable behavior on a real device lacking `TYPE_ROTATION_VECTOR` if such a device is available in the test matrix; otherwise validated via the forced-`isAvailable()==false` test double from Block 3.
@@ -1293,7 +1323,8 @@ No historical document is rewritten.
 | `ShareImageRenderer` reuse regression surface (Block 5B Correction B†) | Low (reduced from the original plan) | Exactly 3 methods widened (`decodeHqCapture`, `renderHqReference`, `decodeReferenceFallback`), not 4 — `prepareHqCaptureForSbs` is excluded entirely, further shrinking the touched surface; visibility-only change, zero logic/call-site change | Full existing `ShareRenderConfigTest`/`ShareImageRendererInstrumentedTest` suites re-run unmodified as Block 5's gate criterion |
 | Date-badge proportional scaling (Block 5B Correction H†) | Low | Output-image-short-edge-relative fractions, derived explicitly from Block 4's shipped dp constants against a documented 360dp baseline (§8.3) — no device-density assumption, no `commonScale`-based dp multiplication (the originally-proposed `dp × 3.0 × commonScale` formula was rejected as physically invalid) | `DateBadgeRendererTest` — fraction-of-short-edge assertions at multiple canvas sizes; real-device visual comparison against the Block 4 preview badge (§25) |
 | Color fidelity (no ICC/color-management handling) | Low (pre-existing, not Wackelbild-specific) | `Bitmap.compress()` does not embed an ICC profile in its output today, for any feature in this app including the already-shipped Share Image pipeline — this is an existing characteristic, not a regression introduced by this feature; no new color-management work is undertaken or required for Block 5 | None beyond existing Share Image behavior — not a new verification surface |
-| Sensor jitter / false switches | Low (resolved — Block 5B Correction D†) | Hysteresis state machine (§7.3); thresholds are no longer placeholders — locked at `THRESHOLD_DEGREES=9f`/`REARM_DEGREES=6f` after Block 3C's real-device tuning pass | Real-device tilt test pass (§25), already completed for the shipped Block 3 |
+| Sensor jitter / false switches (accessibility/arbitration state) | Low (resolved — Block 5B Correction D†) | Hysteresis state machine (§7.3); thresholds are no longer placeholders — locked at `THRESHOLD_DEGREES=9f`/`REARM_DEGREES=6f` after Block 3C's real-device tuning pass. This mitigates the discrete accessibility/arbitration state only | Real-device tilt test pass (§25), already completed for the shipped Block 3's discrete state |
+| Sensor jitter / visible flicker in the continuous blend (§7.7) | Medium (open — not yet mitigated by a shipped implementation) | Required filtering/smoothing/dead-zone damping on the new continuous mapping value (§7.7); exact constants are open real-device tuning parameters, not yet locked | New real-device tilt test pass required (§25) — not covered by the existing, already-completed Block 3C pass, which validated only the discrete hysteresis thresholds |
 | Gesture conflict (swipe vs. scroll) | Medium (resolved structurally) | Preview kept outside the scroll container (§6.3) — no runtime arbitration needed | Manual scroll/swipe coexistence check on Compact and Compact-height devices (§25) |
 | Temporary-file leakage | Low | `cacheDir`-only, sweep-on-entry, cleanup on every terminal state (§11) | Instrumentation test asserting no leftover files after each terminal path |
 | Metadata leakage (Block 5B Correction O†, expanded Block 5E) | Medium | Structural guarantee (no `ExifInterface` write call exists in the new code) + a broadened instrumentation assertion covering GPS, `DateTimeOriginal`, `DateTime`, `Make`, `Model`, `Software`, lens fields, `MakerNote`, `BodySerialNumber`, `LensSerialNumber`, `ImageUniqueID`, and `CameraOwnerName` (all confirmed inspectable via `getAttribute()` against the project's actual `androidx.exifinterface:1.3.7` dependency — wider than the pre-existing Share Image test precedent, which only asserts GPS absence) | `WackelbildPrintRendererInstrumentedTest` |
@@ -1318,7 +1349,7 @@ Items that genuinely cannot be resolved from repository evidence and require ext
 - CI/release-pipeline mechanism for injecting `DEINWACKELBILD_PARTNER_KEY` in release builds (§15) — no CI configuration file was found/inspected as part of this repository-scoped plan.
 - ~~Whether a separate debug vs. release/production key pair is needed (§15)~~ — **resolved (Block 9):** no separate key pair is needed; a single `DEINWACKELBILD_PARTNER_KEY` field is provisioned with a build-type-gated source-resolution chain (`local.properties → env → blank` for debug/non-release; `env → blank` for release, never consulting `local.properties`) — see §15.
 - Privacy Policy / Google Play Data Safety / partner-commission-disclosure content (§27) — legal/compliance, not technical.
-- Real-device tilt threshold/hysteresis final tuning values (§7.3) — **resolved:** locked at `9f`/`6f`, no longer open (Block 5B Correction D†).
+- Real-device tilt threshold/hysteresis final tuning values (§7.3) — **resolved for the discrete accessibility/arbitration role:** locked at `9f`/`6f`, no longer open (Block 5B Correction D†). **Newly open (§7.7):** the continuous blend's mapping curve, useful maximum tilt, and filtering/smoothing/dead-zone constants — required by the amended Source-of-Truth (`DEINWACKELBILD_INTEGRATION_V1.md` §8.1/§8.3) and explicitly not specified normatively there; these are real-device tuning parameters, not yet chosen, and are not assumed to equal the existing `9f`/`6f` values.
 - ~~Real-device badge corner-radius final visual sign-off (§8.3's proposed `boxHeight × 0.25` default)~~ — **resolved:** §8.3's proportional-fraction model (Block 5B Correction H†) is fully deterministic and derived directly from Block 4's shipped, already-visually-approved constants; no further open design choice remains, though a routine real-device print-resolution visual spot-check remains part of §25 as with any new rendering code.
 
 ---

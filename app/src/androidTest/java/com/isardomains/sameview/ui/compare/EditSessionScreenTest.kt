@@ -10,10 +10,12 @@ import androidx.activity.compose.setContent
 import androidx.compose.material3.windowsizeclass.ExperimentalMaterial3WindowSizeClassApi
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
@@ -216,7 +218,7 @@ class EditSessionScreenTest {
         composeRule.waitForIdle()
         composeRule.onNodeWithTag("edit_session_country_picker_list").assertIsDisplayed()
 
-        androidx.test.espresso.Espresso.pressBack()
+        pressBackReliably()
         composeRule.waitForIdle()
 
         composeRule.onNodeWithTag("edit_session_country_field")
@@ -591,6 +593,15 @@ class EditSessionScreenTest {
         composeRule.waitForIdle()
         composeRule.onNodeWithTag("edit_session_save_button").performClick()
         composeRule.waitForIdle()
+        // waitForIdle() alone races IME dismissal/window-resize timing on this real device after
+        // the Save click (EditSessionViewModel.onSave()'s order-validation path is fully
+        // synchronous, so this is a render/window timing race, not a ViewModel data race). Poll
+        // for the actual error text node before the existing, unweakened assertion.
+        composeRule.waitUntil(timeoutMillis = 5_000) {
+            composeRule.onAllNodesWithText("Reference date can't be later than the capture date.")
+                .fetchSemanticsNodes()
+                .isNotEmpty()
+        }
 
         composeRule.onNodeWithText("Reference date can't be later than the capture date.")
             .performScrollTo()
@@ -608,6 +619,13 @@ class EditSessionScreenTest {
         composeRule.waitForIdle()
         composeRule.onNodeWithTag("edit_session_save_button").performClick()
         composeRule.waitForIdle()
+        // See referenceDate_laterThanCapture_showsOrderErrorText_en above: same synchronous
+        // validation path, same real-device IME/window timing race, only the string differs.
+        composeRule.waitUntil(timeoutMillis = 5_000) {
+            composeRule.onAllNodesWithText("Das Referenzdatum darf nicht nach dem Aufnahmedatum liegen.")
+                .fetchSemanticsNodes()
+                .isNotEmpty()
+        }
 
         composeRule.onNodeWithText("Das Referenzdatum darf nicht nach dem Aufnahmedatum liegen.")
             .performScrollTo()
@@ -866,7 +884,16 @@ class EditSessionScreenTest {
                         val localizedConfiguration = Configuration(LocalConfiguration.current).apply {
                             setLocale(locale)
                         }
-                        CompositionLocalProvider(LocalConfiguration provides localizedConfiguration) {
+                        // LocalConfiguration alone does not affect stringResource() -- it reads
+                        // LocalContext.current.resources, which still reflects the real device
+                        // locale (only LocalConfiguration-reading code, e.g. CountryCatalog, is
+                        // affected by the override above). A configuration-context is required so
+                        // resource-backed strings also honor the forced locale.
+                        val localizedContext = LocalContext.current.createConfigurationContext(localizedConfiguration)
+                        CompositionLocalProvider(
+                            LocalConfiguration provides localizedConfiguration,
+                            LocalContext provides localizedContext
+                        ) {
                             screenContent()
                         }
                     } else {
@@ -896,6 +923,11 @@ class EditSessionScreenTest {
         wakeTestDevice()
         scenario = ActivityScenario.launch(ComponentActivity::class.java)
         scenario?.onActivity { activity ->
+            activity.window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
+                activity.setShowWhenLocked(true)
+                activity.setTurnScreenOn(true)
+            }
             activity.setContent {
                 SameViewTheme {
                     CountryPickerSheet(
@@ -923,6 +955,31 @@ class EditSessionScreenTest {
             .uiAutomation
             .executeShellCommand("input keyevent KEYCODE_WAKEUP")
             .close()
+    }
+
+    /**
+     * Retries [androidx.test.espresso.Espresso.pressBack] up to [maxAttempts] times when it fails
+     * with Espresso's internal "root of the view hierarchy ... window focus" wait timeout
+     * (`RootViewPicker.RootViewWithoutFocusException` -- private to that class, so it cannot be
+     * caught by type and is matched by its exact, stable message instead). On this real device the
+     * current root (e.g. the `ModalBottomSheet`'s own dialog window) transiently loses focus to a
+     * system window (observed: the notification shade) under full-suite load, and Espresso's own
+     * ~10s internal wait for that root to regain focus is occasionally not enough. This exception
+     * is thrown strictly while RootViewPicker is still waiting for root readiness, before any back
+     * key is injected (verified against RootViewPicker's source), so retrying here can never
+     * double-dispatch a back press. Any other exception (a real, different failure) is rethrown
+     * immediately without retry.
+     */
+    private fun pressBackReliably(maxAttempts: Int = 3) {
+        repeat(maxAttempts - 1) {
+            try {
+                androidx.test.espresso.Espresso.pressBack()
+                return
+            } catch (e: RuntimeException) {
+                if (e.message?.contains("root of the view hierarchy to have window focus") != true) throw e
+            }
+        }
+        androidx.test.espresso.Espresso.pressBack()
     }
 
     // ── Regression guard — logo card removed from Edit Session ───────────────

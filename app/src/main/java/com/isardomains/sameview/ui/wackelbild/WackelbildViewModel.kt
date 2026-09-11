@@ -21,12 +21,19 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
+
+/** Distinguishes an ordinary foreground resume from a resume that specifically follows a
+ * successfully launched Custom Tab -- only the latter triggers the browser-return reset. */
+internal enum class CustomTabAwaitState { NOT_LAUNCHED, LAUNCHED_AWAITING_RETURN }
 
 /** Which of the two persisted preview images is currently visible on the Wackelbild screen. */
 enum class WackelbildImageSide {
@@ -99,6 +106,12 @@ class WackelbildViewModel @Inject constructor(
 
     private var hysteresisStateMachine: TiltHysteresisStateMachine = TiltHysteresisStateMachine()
 
+    /** Produces the continuous preview-blend fraction (§7.7 of the implementation plan) from the
+     * same raw roll stream the [hysteresisStateMachine] above already consumes -- a second,
+     * independent consumer, not a replacement. See [onRawRollChanged]/[manualToggle] for exactly
+     * when it is fed vs. frozen. */
+    private var tiltBlendMapper: TiltBlendMapper = TiltBlendMapper()
+
     /**
      * Owns the disposable `cacheDir/wackelbild/` temp-file lifecycle. Block 6 scope: only the
      * one-time orphan sweep below. No operation directory is created and no active-operation
@@ -138,6 +151,28 @@ class WackelbildViewModel @Inject constructor(
     private val _operationState = MutableStateFlow<WackelbildOperationState>(WackelbildOperationState.Idle)
     val operationState: StateFlow<WackelbildOperationState> = _operationState.asStateFlow()
 
+    // --- Custom Tab launch bookkeeping (Block 11) ---
+    // Deliberately minimal in-memory-only additions on top of the existing WackelbildOperationState
+    // model above -- no second/parallel operation state machine, no DataStore, no SavedStateHandle.
+
+    private var customTabAwaitState = CustomTabAwaitState.NOT_LAUNCHED
+    private var isScreenForeground = false
+
+    /** A checkout URL that reached `Ready` while the screen was backgrounded -- launch is
+     * deferred until the next [onScreenActive] call, never fired from the background. */
+    private var pendingCheckoutUrl: String? = null
+
+    /** One-shot launch requests, same buffered-Channel convention as the codebase's existing
+     * `ShareComparisonEvent`/`CreateVideoEvent`. A recomposed/rotated collector simply resumes
+     * waiting for the *next* element -- an already-consumed element is never redelivered. */
+    private val _launchCustomTabEvent = Channel<String>(Channel.BUFFERED)
+    val launchCustomTabEvent: Flow<String> = _launchCustomTabEvent.receiveAsFlow()
+
+    /** Non-null only while a Custom Tab launch attempt has failed and the same URL is retained
+     * for a same-URL retry-open (no re-render, no new handoff, no re-upload). */
+    private val _customTabOpenFailure = MutableStateFlow<String?>(null)
+    val customTabOpenFailure: StateFlow<String?> = _customTabOpenFailure.asStateFlow()
+
     private val sessionDir: File = File(context.filesDir, "sessions/$sessionId")
 
     /** Overridable in unit tests; production default performs the narrow metadata.json read. */
@@ -159,6 +194,7 @@ class WackelbildViewModel @Inject constructor(
         tiltProvider: TiltProvider? = null,
         displayRotationProvider: (() -> Int)? = null,
         hysteresisStateMachine: TiltHysteresisStateMachine? = null,
+        tiltBlendMapper: TiltBlendMapper? = null,
         tempFileManager: WackelbildTempFileManager? = null,
         apiClient: DeinWackelbildApiClient? = null,
         renderPrintPair: (suspend (File, File, WackelbildDateOverlay?) -> WackelbildPrintResult)? = null
@@ -166,6 +202,7 @@ class WackelbildViewModel @Inject constructor(
         if (tiltProvider != null) this.tiltProvider = tiltProvider
         if (displayRotationProvider != null) this.displayRotationProvider = displayRotationProvider
         if (hysteresisStateMachine != null) this.hysteresisStateMachine = hysteresisStateMachine
+        if (tiltBlendMapper != null) this.tiltBlendMapper = tiltBlendMapper
         if (tempFileManager != null) this.tempFileManager = tempFileManager
         if (apiClient != null) this.apiClient = apiClient
         if (renderPrintPair != null) this.renderPrintPair = renderPrintPair
@@ -181,6 +218,13 @@ class WackelbildViewModel @Inject constructor(
 
     private val _visibleImage = MutableStateFlow(WackelbildImageSide.REFERENCE)
     val visibleImage: StateFlow<WackelbildImageSide> = _visibleImage.asStateFlow()
+
+    /** Continuous preview-blend fraction (§7.7): `0f` = full Reference, `0.5f` = calibrated
+     * neutral, `1f` = full Capture. Purely a rendering weight -- [visibleImage] above remains the
+     * sole discrete semantic/manual/accessibility state; this never drives it and is never driven
+     * by it except at the manual-selection pin points (see [manualToggle]). */
+    private val _previewBlendFraction = MutableStateFlow(0.5f)
+    val previewBlendFraction: StateFlow<Float> = _previewBlendFraction.asStateFlow()
 
     // --- Date overlay (Block 4) ---
     // Temporary, in-memory only: no DataStore, no SavedStateHandle, no metadata.json write.
@@ -252,11 +296,34 @@ class WackelbildViewModel @Inject constructor(
     internal var neutralObservedSinceOverride = false
         private set
 
-    /** Called by the screen on ON_RESUME. No-op if already active or no sensor exists. */
+    /**
+     * Called by the screen on ON_RESUME. Runs unconditionally (deliberately ahead of the
+     * sensor-specific early return below, which does not apply to a device with no tilt sensor)
+     * -- foreground tracking, the Custom-Tab-return reset, and delivery of a deferred checkout
+     * launch must all happen on every resume, not only when the sensor needs (re)starting.
+     */
     fun onScreenActive() {
+        isScreenForeground = true
+
+        if (customTabAwaitState == CustomTabAwaitState.LAUNCHED_AWAITING_RETURN) {
+            // Genuine Custom Tab return, not an ordinary unrelated resume: reset to Reference and
+            // clear the marker so a later unrelated resume in the same screen visit is a no-op.
+            // The date toggle is re-enabled implicitly -- operationState was already reset to
+            // Idle at successful-launch time (see handleReady/onCustomTabLaunchResult), and the
+            // screen derives toggle editability from operationState, not a separate flag here.
+            customTabAwaitState = CustomTabAwaitState.NOT_LAUNCHED
+            _visibleImage.value = WackelbildImageSide.REFERENCE
+        }
+
+        pendingCheckoutUrl?.let { url ->
+            pendingCheckoutUrl = null
+            _launchCustomTabEvent.trySend(url)
+        }
+
         if (isSensorActive || !tiltProvider.isAvailable()) return
         isSensorActive = true
         neutralRoll = null
+        tiltBlendMapper.reset()
         tiltProvider.startUpdates(displayRotationProvider) { rawRollDegrees ->
             onRawRollChanged(rawRollDegrees)
         }
@@ -264,10 +331,12 @@ class WackelbildViewModel @Inject constructor(
 
     /** Called by the screen on ON_PAUSE. Stops the sensor and clears the calibrated neutral. */
     fun onScreenInactive() {
+        isScreenForeground = false
         if (!isSensorActive) return
         isSensorActive = false
         tiltProvider.stopUpdates()
         neutralRoll = null
+        tiltBlendMapper.reset()
     }
 
     /** Called by the screen when it leaves composition. Fully releases the sensor. */
@@ -275,6 +344,7 @@ class WackelbildViewModel @Inject constructor(
         isSensorActive = false
         tiltProvider.stopUpdates()
         neutralRoll = null
+        tiltBlendMapper.reset()
     }
 
     /** Called by the screen when a deliberate horizontal swipe is detected on the preview. */
@@ -292,6 +362,13 @@ class WackelbildViewModel @Inject constructor(
             WackelbildImageSide.REFERENCE -> WackelbildImageSide.CAPTURE
             WackelbildImageSide.CAPTURE -> WackelbildImageSide.REFERENCE
         }
+        // Pin the continuous blend to the matching full endpoint and seed the mapper's smoothing
+        // state to the same point (seed-and-freeze design, §7.7): the mapper is not fed again
+        // (see onRawRollChanged below) until swipeOverrideActive clears, so when feeding resumes
+        // it converges from this endpoint instead of jumping to the live sensor position.
+        val endpoint = if (_visibleImage.value == WackelbildImageSide.REFERENCE) 0f else 1f
+        _previewBlendFraction.value = endpoint
+        tiltBlendMapper.seedToFraction(endpoint)
         swipeOverrideActive = true
         neutralObservedSinceOverride = false
     }
@@ -306,6 +383,15 @@ class WackelbildViewModel @Inject constructor(
         when (val result = hysteresisStateMachine.onDeltaDegrees(rawRollDegrees - neutral)) {
             is TiltHysteresisResult.NoChange -> Unit
             is TiltHysteresisResult.Transitioned -> handleHysteresisTransition(result.newState)
+        }
+        // Evaluated *after* the hysteresis call above, which may itself have just cleared
+        // swipeOverrideActive (the release branch in handleHysteresisTransition) -- so a release
+        // and the first live-fed continuous value happen within this same sensor event, not one
+        // tick later. While override is active the mapper is not fed at all (frozen), matching
+        // the seed set in manualToggle(); this is a bounded first step on resume, not a
+        // mathematically zero discontinuity (§7.7).
+        if (!swipeOverrideActive) {
+            _previewBlendFraction.value = tiltBlendMapper.onRawRollDegrees(rawRollDegrees, neutral)
         }
     }
 
@@ -368,7 +454,45 @@ class WackelbildViewModel @Inject constructor(
                 onPhaseChange = { _operationState.value = it }
             )
             _operationState.value = result
+            if (result is WackelbildOperationState.Ready) {
+                requestCustomTabLaunch(result.checkoutUrl)
+            }
         }
+    }
+
+    /** Emits the launch request immediately while the screen is in the foreground; otherwise
+     * defers it (never launching a browser while SameView itself is backgrounded, per spec)
+     * until the next [onScreenActive]. */
+    private fun requestCustomTabLaunch(checkoutUrl: String) {
+        if (isScreenForeground) {
+            _launchCustomTabEvent.trySend(checkoutUrl)
+        } else {
+            pendingCheckoutUrl = checkoutUrl
+        }
+    }
+
+    /**
+     * Reported by the screen after it actually invokes the Custom Tab launcher for
+     * [checkoutUrl]. On success, marks the flow as awaiting the browser return and resets
+     * [operationState] to [WackelbildOperationState.Idle] (no intermediate success screen -- the
+     * Custom Tab itself is now what's visible). On failure, retains [checkoutUrl] in
+     * [customTabOpenFailure] for a same-URL retry-open.
+     */
+    fun onCustomTabLaunchResult(checkoutUrl: String, success: Boolean) {
+        if (success) {
+            customTabAwaitState = CustomTabAwaitState.LAUNCHED_AWAITING_RETURN
+            _customTabOpenFailure.value = null
+            _operationState.value = WackelbildOperationState.Idle
+        } else {
+            _customTabOpenFailure.value = checkoutUrl
+        }
+    }
+
+    /** Retries opening the exact same retained checkout URL -- no re-render, no new handoff, no
+     * re-upload. Safe no-op if no open failure is currently pending. */
+    fun retryOpenCheckoutUrl() {
+        val url = _customTabOpenFailure.value ?: return
+        _launchCustomTabEvent.trySend(url)
     }
 
     private fun currentDateOverlayInput(): WackelbildDateOverlay? =

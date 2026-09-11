@@ -143,6 +143,7 @@ import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.launch
 import java.text.DateFormat
 import java.util.Date
+import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.roundToInt
 import org.json.JSONObject
@@ -202,7 +203,10 @@ fun CompareScreen(
     var showMoreMenu by remember { mutableStateOf(false) }
     var showExportMenu by remember { mutableStateOf(false) }
     val isLandscape = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
-    val currentLocale = LocalConfiguration.current.locales.get(0)
+    // LocaleList.get(0) returns null when the list is empty (e.g. a bare Configuration() with no
+    // locale set) -- CountryCatalog.resolveDisplayName requires a non-null Locale, so fall back
+    // to the JVM default in that case rather than crashing.
+    val currentLocale = LocalConfiguration.current.locales.get(0) ?: Locale.getDefault()
     val resolvedLocationCountry = remember(locationCountry, locationCountryCode, currentLocale) {
         CountryCatalog.resolveDisplayName(locationCountry, locationCountryCode, currentLocale)
     }

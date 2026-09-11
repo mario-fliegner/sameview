@@ -8,8 +8,10 @@ import androidx.activity.compose.setContent
 import androidx.compose.material3.windowsizeclass.WindowWidthSizeClass
 import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.SemanticsNodeInteraction
@@ -24,6 +26,7 @@ import androidx.compose.ui.test.onChild
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.swipeLeft
 import androidx.compose.ui.test.swipeRight
@@ -33,8 +36,12 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.isardomains.sameview.R
 import com.isardomains.sameview.ui.theme.SameViewTheme
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.launch
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -82,7 +89,17 @@ class WackelbildScreenTest {
     /** Mutable UI state a real ViewModel would own, standing in for it in these content-level tests. */
     private class WackelbildTestState(
         val visibleImage: MutableState<WackelbildImageSide>,
-        val dateOverlayEnabled: MutableState<Boolean>
+        val previewBlendFraction: MutableState<Float>,
+        val dateOverlayEnabled: MutableState<Boolean>,
+        val operationState: MutableState<WackelbildOperationState>,
+        val customTabOpenFailure: MutableState<String?>,
+        val startOperationCallCount: MutableState<Int>,
+        val confirmFallbackCallCount: MutableState<Int>,
+        val cancelOperationCallCount: MutableState<Int>,
+        val retryOpenCallCount: MutableState<Int>,
+        val launchedUrls: List<String>,
+        val launchResultReports: List<Pair<String, Boolean>>,
+        val emitLaunchEvent: (String) -> Unit
     )
 
     /**
@@ -94,6 +111,11 @@ class WackelbildScreenTest {
      * unavailable" rule is `SettingsSwitchRow`'s own `enabled`-gated `clickable`, already
      * exercised for real here — and is separately unit-tested at the ViewModel level). Lifecycle
      * callbacks are pass-through so tests can assert on invocation directly.
+     *
+     * `onLaunchCustomTab` is replaced by a fake recording lambda controlled by
+     * [launchCustomTabResult] -- no real Custom Tab/browser is ever launched by these tests.
+     * [WackelbildTestState.emitLaunchEvent] lets a test simulate the ViewModel reaching `Ready`
+     * and requesting a launch, without needing a real orchestrator/API client.
      */
     private fun launch(
         referenceFile: File,
@@ -102,6 +124,9 @@ class WackelbildScreenTest {
         isDateOverlayAvailable: Boolean = false,
         referenceDateBadgeText: String? = null,
         captureDateBadgeText: String? = null,
+        initialOperationState: WackelbildOperationState = WackelbildOperationState.Idle,
+        initialCustomTabOpenFailure: String? = null,
+        launchCustomTabResult: Boolean = true,
         onBack: () -> Unit = {},
         onScreenActive: () -> Unit = {},
         onScreenInactive: () -> Unit = {},
@@ -123,25 +148,81 @@ class WackelbildScreenTest {
             activity.setContent {
                 SameViewTheme {
                     val visibleImage = remember { mutableStateOf(WackelbildImageSide.REFERENCE) }
+                    // Mirrors WackelbildViewModel.manualToggle()'s seed-and-freeze pin: a manual
+                    // selection always pins the fraction to the matching full endpoint. Default
+                    // 0f pairs with the REFERENCE default above (not the real ViewModel's 0.5f
+                    // neutral default -- this stateless-content harness represents a manually
+                    // controlled discrete pick, not live sensor calibration).
+                    val previewBlendFraction = remember { mutableStateOf(0f) }
                     val dateOverlayEnabled = remember { mutableStateOf(false) }
-                    testState = WackelbildTestState(visibleImage, dateOverlayEnabled)
+                    val operationState = remember { mutableStateOf(initialOperationState) }
+                    val customTabOpenFailure = remember { mutableStateOf(initialCustomTabOpenFailure) }
+                    val startOperationCallCount = remember { mutableStateOf(0) }
+                    val confirmFallbackCallCount = remember { mutableStateOf(0) }
+                    val cancelOperationCallCount = remember { mutableStateOf(0) }
+                    val retryOpenCallCount = remember { mutableStateOf(0) }
+                    val launchedUrls = remember { mutableStateListOf<String>() }
+                    val launchResultReports = remember { mutableStateListOf<Pair<String, Boolean>>() }
+                    val launchEvent = remember { MutableSharedFlow<String>(extraBufferCapacity = 8) }
+                    val scope = rememberCoroutineScope()
+
+                    testState = WackelbildTestState(
+                        visibleImage = visibleImage,
+                        previewBlendFraction = previewBlendFraction,
+                        dateOverlayEnabled = dateOverlayEnabled,
+                        operationState = operationState,
+                        customTabOpenFailure = customTabOpenFailure,
+                        startOperationCallCount = startOperationCallCount,
+                        confirmFallbackCallCount = confirmFallbackCallCount,
+                        cancelOperationCallCount = cancelOperationCallCount,
+                        retryOpenCallCount = retryOpenCallCount,
+                        launchedUrls = launchedUrls,
+                        launchResultReports = launchResultReports,
+                        emitLaunchEvent = { url -> scope.launch { launchEvent.emit(url) } }
+                    )
+
                     WackelbildScreenContent(
                         referenceFile = referenceFile,
                         captureFile = captureFile,
                         visibleImage = visibleImage.value,
+                        previewBlendFraction = previewBlendFraction.value,
                         isSensorAvailable = isSensorAvailable,
                         dateOverlayEnabled = dateOverlayEnabled.value,
                         isDateOverlayAvailable = isDateOverlayAvailable,
                         referenceDateBadgeText = referenceDateBadgeText,
                         captureDateBadgeText = captureDateBadgeText,
+                        operationState = operationState.value,
+                        customTabOpenFailure = customTabOpenFailure.value,
+                        launchCustomTabEvent = launchEvent,
                         onDateOverlayToggled = { dateOverlayEnabled.value = it },
-                        onSwipeDetected = { visibleImage.value = visibleImage.value.opposite() },
-                        onAccessibilityToggle = { visibleImage.value = visibleImage.value.opposite() },
+                        onSwipeDetected = {
+                            visibleImage.value = visibleImage.value.opposite()
+                            previewBlendFraction.value = if (visibleImage.value == WackelbildImageSide.REFERENCE) 0f else 1f
+                        },
+                        onAccessibilityToggle = {
+                            visibleImage.value = visibleImage.value.opposite()
+                            previewBlendFraction.value = if (visibleImage.value == WackelbildImageSide.REFERENCE) 0f else 1f
+                        },
                         onScreenActive = onScreenActive,
                         onScreenInactive = onScreenInactive,
                         onScreenLeft = onScreenLeft,
+                        onStartOperation = { startOperationCallCount.value++ },
+                        onConfirmFallback = { confirmFallbackCallCount.value++ },
+                        onCancelOperation = {
+                            cancelOperationCallCount.value++
+                            operationState.value = WackelbildOperationState.Idle
+                        },
+                        onCustomTabLaunchResult = { url, success -> launchResultReports.add(url to success) },
+                        onRetryOpenCheckoutUrl = {
+                            retryOpenCallCount.value++
+                            launchedUrls.lastOrNull()?.let { url -> scope.launch { launchEvent.emit(url) } }
+                        },
                         onBack = onBack,
-                        windowWidthSizeClass = windowWidthSizeClass
+                        windowWidthSizeClass = windowWidthSizeClass,
+                        onLaunchCustomTab = { _, url ->
+                            launchedUrls.add(url)
+                            launchCustomTabResult
+                        }
                     )
                 }
             }
@@ -269,9 +350,17 @@ class WackelbildScreenTest {
 
     @Test
     fun initialVisibleImage_isReference() {
+        // Both image nodes now always coexist in the composition (spec §8.1) -- dominance is
+        // expressed via alpha/the blend fraction, not via one node's presence/absence.
         launch(referenceFile = validReference(), captureFile = validCapture())
         composeRule.onNodeWithTag("wackelbild_reference_image").assertIsDisplayed()
-        composeRule.onNodeWithTag("wackelbild_capture_image").assertDoesNotExist()
+        composeRule.onNodeWithTag("wackelbild_capture_image").assertIsDisplayed()
+        assertEquals(
+            0f,
+            composeRule.onNodeWithTag("wackelbild_preview_interactive_area")
+                .fetchSemanticsNode().config[PreviewBlendFractionKey],
+            0.0001f
+        )
     }
 
     // --- Valid Capture displayed after toggle ---
@@ -283,8 +372,43 @@ class WackelbildScreenTest {
             .performTouchInput { swipeLeft() }
         composeRule.waitForIdle()
         assertEquals(WackelbildImageSide.CAPTURE, state.visibleImage.value)
+        // Both image nodes coexist (spec §8.1); the manual endpoint pins full Capture dominance.
         composeRule.onNodeWithTag("wackelbild_capture_image").assertIsDisplayed()
-        composeRule.onNodeWithTag("wackelbild_reference_image").assertDoesNotExist()
+        composeRule.onNodeWithTag("wackelbild_reference_image").assertIsDisplayed()
+        assertEquals(
+            1f,
+            composeRule.onNodeWithTag("wackelbild_preview_interactive_area")
+                .fetchSemanticsNode().config[PreviewBlendFractionKey],
+            0.0001f
+        )
+    }
+
+    // --- Continuous blend / ridge overlay / perspective (§7.7 revision) ---
+
+    @Test
+    fun ridgeOverlay_isPresentInComposition() {
+        launch(referenceFile = validReference(), captureFile = validCapture())
+        composeRule.onNodeWithTag("wackelbild_ridge_overlay").assertIsDisplayed()
+    }
+
+    @Test
+    fun previewContainer_remainsDisplayed_atFullReferenceEndpoint() {
+        launch(referenceFile = validReference(), captureFile = validCapture())
+        // Default harness state is already the full-Reference endpoint (0f) -- the perspective
+        // graphicsLayer transform at this extreme must not crash or hide the container. Exact
+        // rotated/clipped geometry is not asserted here (Compose's bounds APIs report pre-
+        // transform layout bounds, not the painted, rotated appearance) -- real-device visual
+        // validation remains required for clipping/subtlety per the implementation plan.
+        composeRule.onNodeWithTag("wackelbild_reference_preview_container").assertIsDisplayed()
+    }
+
+    @Test
+    fun previewContainer_remainsDisplayed_atFullCaptureEndpoint() {
+        launch(referenceFile = validReference(), captureFile = validCapture())
+        composeRule.onNodeWithTag("wackelbild_preview_interactive_area")
+            .performTouchInput { swipeLeft() } // -> full Capture endpoint (1f)
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("wackelbild_reference_preview_container").assertIsDisplayed()
     }
 
     // --- Missing/corrupt Capture -> same unified fallback ---
@@ -817,5 +941,488 @@ class WackelbildScreenTest {
         composeRule.waitForIdle()
         composeRule.onNodeWithTag("wackelbild_screen_root").assertIsDisplayed()
         composeRule.onNodeWithTag("wackelbild_reference_image").assertIsDisplayed()
+    }
+
+    // === Block 11: CTA / disclosure / consent ===================================================
+
+    @Test
+    fun disclosure_isVisible() {
+        launch(referenceFile = validReference(), captureFile = validCapture())
+        composeRule.onNodeWithTag("wackelbild_transfer_disclosure").assertIsDisplayed()
+    }
+
+    @Test
+    fun cta_visibleInIdle_withExactText() {
+        launch(referenceFile = validReference(), captureFile = validCapture())
+        composeRule.onNodeWithTag("wackelbild_cta_button").performScrollTo().assertIsDisplayed()
+        composeRule.onNodeWithText(context.getString(R.string.wackelbild_cta_order)).assertIsDisplayed()
+    }
+
+    @Test
+    fun cta_tap_invokesStartOperationExactlyOnce_noConsentDialog() {
+        val state = launch(referenceFile = validReference(), captureFile = validCapture())
+        composeRule.onNodeWithTag("wackelbild_cta_button").performScrollTo().performClick()
+        composeRule.waitForIdle()
+        assertEquals(1, state.startOperationCallCount.value)
+        // No separate consent dialog exists at all -- the CTA tap itself is consent (spec §10).
+        composeRule.onNodeWithTag("wackelbild_fallback_dialog").assertDoesNotExist()
+        composeRule.onNodeWithTag("wackelbild_cancel_transfer_dialog").assertDoesNotExist()
+    }
+
+    @Test
+    fun screenOpen_doesNotStartOperation() {
+        val state = launch(referenceFile = validReference(), captureFile = validCapture())
+        assertEquals(0, state.startOperationCallCount.value)
+    }
+
+    @Test
+    fun dateToggleAndPreviewInteraction_doNotStartOperation() {
+        val state = launch(
+            referenceFile = validReference(),
+            captureFile = validCapture(),
+            isDateOverlayAvailable = true
+        )
+        composeRule.onNodeWithTag("wackelbild_date_toggle").performClick()
+        composeRule.onNodeWithTag("wackelbild_preview_interactive_area").performTouchInput { swipeLeft() }
+        composeRule.waitForIdle()
+        assertEquals(0, state.startOperationCallCount.value)
+    }
+
+    // === Block 11: Busy presentation ============================================================
+
+    @Test
+    fun preparing_showsSpinnerAndCollapsedCopy_ctaAbsent() {
+        launch(
+            referenceFile = validReference(),
+            captureFile = validCapture(),
+            initialOperationState = WackelbildOperationState.Preparing
+        )
+        composeRule.onNodeWithTag("wackelbild_loading_spinner").performScrollTo().assertIsDisplayed()
+        composeRule.onNodeWithText(context.getString(R.string.wackelbild_loading_preparing))
+            .performScrollTo()
+            .assertIsDisplayed()
+        composeRule.onNodeWithTag("wackelbild_cta_button").assertDoesNotExist()
+    }
+
+    @Test
+    fun creatingHandoff_showsSameCollapsedCopy() {
+        launch(
+            referenceFile = validReference(),
+            captureFile = validCapture(),
+            initialOperationState = WackelbildOperationState.CreatingHandoff
+        )
+        composeRule.onNodeWithTag("wackelbild_loading_spinner").performScrollTo().assertIsDisplayed()
+        composeRule.onNodeWithText(context.getString(R.string.wackelbild_loading_preparing))
+            .performScrollTo()
+            .assertIsDisplayed()
+    }
+
+    @Test
+    fun uploadingSlotOne_showsSameCollapsedCopy_noSlotDetail() {
+        launch(
+            referenceFile = validReference(),
+            captureFile = validCapture(),
+            initialOperationState = WackelbildOperationState.UploadingSlot(
+                com.isardomains.sameview.net.deinwackelbild.DeinWackelbildSlot.ONE
+            )
+        )
+        composeRule.onNodeWithTag("wackelbild_loading_spinner").performScrollTo().assertIsDisplayed()
+        composeRule.onNodeWithText(context.getString(R.string.wackelbild_loading_preparing))
+            .performScrollTo()
+            .assertIsDisplayed()
+    }
+
+    @Test
+    fun uploadingSlotTwo_showsSameCollapsedCopy_noSlotDetail() {
+        launch(
+            referenceFile = validReference(),
+            captureFile = validCapture(),
+            initialOperationState = WackelbildOperationState.UploadingSlot(
+                com.isardomains.sameview.net.deinwackelbild.DeinWackelbildSlot.TWO
+            )
+        )
+        composeRule.onNodeWithTag("wackelbild_loading_spinner").performScrollTo().assertIsDisplayed()
+        composeRule.onNodeWithText(context.getString(R.string.wackelbild_loading_preparing))
+            .performScrollTo()
+            .assertIsDisplayed()
+    }
+
+    @Test
+    fun busy_dateToggleDisabled() {
+        launch(
+            referenceFile = validReference(),
+            captureFile = validCapture(),
+            isDateOverlayAvailable = true,
+            initialOperationState = WackelbildOperationState.Preparing
+        )
+        composeRule.onNodeWithTag("wackelbild_date_toggle").assertIsNotEnabled()
+    }
+
+    @Test
+    fun busy_tiltSwipePreviewRemainsUsable() {
+        val state = launch(
+            referenceFile = validReference(),
+            captureFile = validCapture(),
+            initialOperationState = WackelbildOperationState.Preparing
+        )
+        composeRule.onNodeWithTag("wackelbild_preview_interactive_area").performTouchInput { swipeLeft() }
+        composeRule.waitForIdle()
+        assertEquals(WackelbildImageSide.CAPTURE, state.visibleImage.value)
+    }
+
+    // === Block 11: Fallback confirmation ========================================================
+
+    @Test
+    fun fallbackDialog_shownOnlyWhileAwaitingFallbackConfirmation_withExactCopy() {
+        launch(
+            referenceFile = validReference(),
+            captureFile = validCapture(),
+            initialOperationState = WackelbildOperationState.AwaitingFallbackConfirmation
+        )
+        composeRule.onNodeWithTag("wackelbild_fallback_dialog").assertIsDisplayed()
+        composeRule.onNodeWithText(context.getString(R.string.wackelbild_quality_fallback_title)).assertIsDisplayed()
+        composeRule.onNodeWithText(context.getString(R.string.wackelbild_quality_fallback_message)).assertIsDisplayed()
+        composeRule.onNodeWithText(context.getString(R.string.wackelbild_quality_fallback_cancel)).assertIsDisplayed()
+        composeRule.onNodeWithText(context.getString(R.string.wackelbild_quality_fallback_continue)).assertIsDisplayed()
+    }
+
+    @Test
+    fun fallbackDialog_notShownOnScreenOpen() {
+        launch(referenceFile = validReference(), captureFile = validCapture())
+        composeRule.onNodeWithTag("wackelbild_fallback_dialog").assertDoesNotExist()
+    }
+
+    @Test
+    fun fallbackContinue_invokesConfirmFallbackExactlyOnce() {
+        val state = launch(
+            referenceFile = validReference(),
+            captureFile = validCapture(),
+            initialOperationState = WackelbildOperationState.AwaitingFallbackConfirmation
+        )
+        composeRule.onNodeWithTag("wackelbild_fallback_continue_button").performClick()
+        composeRule.waitForIdle()
+        assertEquals(1, state.confirmFallbackCallCount.value)
+        assertEquals(0, state.cancelOperationCallCount.value)
+    }
+
+    @Test
+    fun fallbackCancel_invokesCancelOperation() {
+        val state = launch(
+            referenceFile = validReference(),
+            captureFile = validCapture(),
+            initialOperationState = WackelbildOperationState.AwaitingFallbackConfirmation
+        )
+        composeRule.onNodeWithTag("wackelbild_fallback_cancel_button").performClick()
+        composeRule.waitForIdle()
+        assertEquals(1, state.cancelOperationCallCount.value)
+    }
+
+    @Test
+    fun backDuringFallback_behavesLikeCancel_noGenericDialogStacked() {
+        val state = launch(
+            referenceFile = validReference(),
+            captureFile = validCapture(),
+            initialOperationState = WackelbildOperationState.AwaitingFallbackConfirmation
+        )
+        composeRule.onNodeWithTag("wackelbild_back_button").performClick()
+        composeRule.waitForIdle()
+        assertEquals(1, state.cancelOperationCallCount.value)
+        composeRule.onNodeWithTag("wackelbild_cancel_transfer_dialog").assertDoesNotExist()
+    }
+
+    // === Block 11: Generic transfer cancellation ================================================
+
+    @Test
+    fun backDuringPreparing_showsGenericCancelDialog_withExactCopy() {
+        launch(
+            referenceFile = validReference(),
+            captureFile = validCapture(),
+            initialOperationState = WackelbildOperationState.Preparing
+        )
+        composeRule.onNodeWithTag("wackelbild_back_button").performClick()
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("wackelbild_cancel_transfer_dialog").assertIsDisplayed()
+        composeRule.onNodeWithText(context.getString(R.string.wackelbild_cancel_transfer_title)).assertIsDisplayed()
+        composeRule.onNodeWithText(context.getString(R.string.wackelbild_cancel_transfer_message)).assertIsDisplayed()
+    }
+
+    @Test
+    fun backDuringCreatingHandoff_showsGenericCancelDialog() {
+        launch(
+            referenceFile = validReference(),
+            captureFile = validCapture(),
+            initialOperationState = WackelbildOperationState.CreatingHandoff
+        )
+        composeRule.onNodeWithTag("wackelbild_back_button").performClick()
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("wackelbild_cancel_transfer_dialog").assertIsDisplayed()
+    }
+
+    @Test
+    fun backDuringUploadingSlot_showsGenericCancelDialog() {
+        launch(
+            referenceFile = validReference(),
+            captureFile = validCapture(),
+            initialOperationState = WackelbildOperationState.UploadingSlot(
+                com.isardomains.sameview.net.deinwackelbild.DeinWackelbildSlot.ONE
+            )
+        )
+        composeRule.onNodeWithTag("wackelbild_back_button").performClick()
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("wackelbild_cancel_transfer_dialog").assertIsDisplayed()
+    }
+
+    @Test
+    fun keepTransferring_dismissesDialogOnly_noCancel() {
+        val state = launch(
+            referenceFile = validReference(),
+            captureFile = validCapture(),
+            initialOperationState = WackelbildOperationState.Preparing
+        )
+        composeRule.onNodeWithTag("wackelbild_back_button").performClick()
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("wackelbild_cancel_transfer_continue_button").performClick()
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("wackelbild_cancel_transfer_dialog").assertDoesNotExist()
+        assertEquals(0, state.cancelOperationCallCount.value)
+    }
+
+    @Test
+    fun cancelTransfer_invokesCancelOperation() {
+        val state = launch(
+            referenceFile = validReference(),
+            captureFile = validCapture(),
+            initialOperationState = WackelbildOperationState.Preparing
+        )
+        composeRule.onNodeWithTag("wackelbild_back_button").performClick()
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("wackelbild_cancel_transfer_stop_button").performClick()
+        composeRule.waitForIdle()
+        assertEquals(1, state.cancelOperationCallCount.value)
+    }
+
+    @Test
+    fun failedState_backNavigatesNormally_noDialog() {
+        var backInvoked = false
+        launch(
+            referenceFile = validReference(),
+            captureFile = validCapture(),
+            initialOperationState = WackelbildOperationState.Failed(
+                WackelbildOperationFailure(WackelbildOperationFailureCategory.PREPARATION_FAILED)
+            ),
+            onBack = { backInvoked = true }
+        )
+        composeRule.onNodeWithTag("wackelbild_back_button").performClick()
+        composeRule.waitForIdle()
+        assertTrue(backInvoked)
+        composeRule.onNodeWithTag("wackelbild_cancel_transfer_dialog").assertDoesNotExist()
+    }
+
+    // === Block 11: Failure copy mapping ==========================================================
+
+    @Test
+    fun networkUnavailable_exactCopyAndRetryAction() {
+        launch(
+            referenceFile = validReference(),
+            captureFile = validCapture(),
+            initialOperationState = WackelbildOperationState.Failed(
+                WackelbildOperationFailure(WackelbildOperationFailureCategory.NETWORK_UNAVAILABLE)
+            )
+        )
+        composeRule.onNodeWithText(context.getString(R.string.wackelbild_error_no_internet)).assertIsDisplayed()
+        composeRule.onNodeWithTag("wackelbild_error_retry_button").performScrollTo().assertIsDisplayed()
+        composeRule.onNodeWithText(context.getString(R.string.wackelbild_error_retry)).assertIsDisplayed()
+    }
+
+    @Test
+    fun serverTemporary_exactCopyAndRetryAction() {
+        launch(
+            referenceFile = validReference(),
+            captureFile = validCapture(),
+            initialOperationState = WackelbildOperationState.Failed(
+                WackelbildOperationFailure(WackelbildOperationFailureCategory.SERVER_TEMPORARY)
+            )
+        )
+        composeRule.onNodeWithText(context.getString(R.string.wackelbild_error_transfer_failed)).assertIsDisplayed()
+        composeRule.onNodeWithTag("wackelbild_error_retry_button").performScrollTo().assertIsDisplayed()
+    }
+
+    @Test
+    fun integrationUnavailable_exactCopy_noDedicatedRetryButton() {
+        launch(
+            referenceFile = validReference(),
+            captureFile = validCapture(),
+            initialOperationState = WackelbildOperationState.Failed(
+                WackelbildOperationFailure(WackelbildOperationFailureCategory.INTEGRATION_UNAVAILABLE)
+            )
+        )
+        composeRule.onNodeWithText(context.getString(R.string.wackelbild_error_integration_unavailable))
+            .assertIsDisplayed()
+        composeRule.onNodeWithTag("wackelbild_error_retry_button").assertDoesNotExist()
+        // The normal CTA is what's available again -- not a dedicated retry action.
+        composeRule.onNodeWithTag("wackelbild_cta_button").performScrollTo().assertIsDisplayed()
+    }
+
+    @Test
+    fun preparationFailed_genericCreationFailureCopy_noRetryButton() {
+        launch(
+            referenceFile = validReference(),
+            captureFile = validCapture(),
+            initialOperationState = WackelbildOperationState.Failed(
+                WackelbildOperationFailure(WackelbildOperationFailureCategory.PREPARATION_FAILED)
+            )
+        )
+        composeRule.onNodeWithText(context.getString(R.string.wackelbild_error_preparation_failed)).assertIsDisplayed()
+        composeRule.onNodeWithTag("wackelbild_error_retry_button").assertDoesNotExist()
+    }
+
+    @Test
+    fun invalidLocalOutput_sameGenericCreationFailureCopy() {
+        launch(
+            referenceFile = validReference(),
+            captureFile = validCapture(),
+            initialOperationState = WackelbildOperationState.Failed(
+                WackelbildOperationFailure(WackelbildOperationFailureCategory.INVALID_LOCAL_OUTPUT)
+            )
+        )
+        composeRule.onNodeWithText(context.getString(R.string.wackelbild_error_preparation_failed)).assertIsDisplayed()
+        composeRule.onNodeWithTag("wackelbild_error_retry_button").assertDoesNotExist()
+    }
+
+    @Test
+    fun handoffFailed_sameGenericCreationFailureCopy_noTechnicalDetail() {
+        launch(
+            referenceFile = validReference(),
+            captureFile = validCapture(),
+            initialOperationState = WackelbildOperationState.Failed(
+                WackelbildOperationFailure(WackelbildOperationFailureCategory.HANDOFF_FAILED)
+            )
+        )
+        composeRule.onNodeWithText(context.getString(R.string.wackelbild_error_preparation_failed)).assertIsDisplayed()
+        composeRule.onNodeWithTag("wackelbild_error_retry_button").assertDoesNotExist()
+        composeRule.onNodeWithText("HANDOFF_FAILED").assertDoesNotExist()
+    }
+
+    // === Block 11: Custom Tab launch / open-failure / retry-open ===============================
+
+    @Test
+    fun readyEvent_invokesFakeLauncherWithExactCheckoutUrl() {
+        val state = launch(referenceFile = validReference(), captureFile = validCapture())
+        state.emitLaunchEvent("https://deinwackelbild.de/checkout/h1?token=abc")
+        composeRule.waitForIdle()
+        assertEquals(listOf("https://deinwackelbild.de/checkout/h1?token=abc"), state.launchedUrls)
+        assertEquals(
+            listOf("https://deinwackelbild.de/checkout/h1?token=abc" to true),
+            state.launchResultReports
+        )
+    }
+
+    @Test
+    fun recomposition_doesNotInvokeLauncherASecondTime() {
+        val state = launch(referenceFile = validReference(), captureFile = validCapture())
+        state.emitLaunchEvent("https://deinwackelbild.de/checkout/h1")
+        composeRule.waitForIdle()
+        // Force a recomposition unrelated to the launch event.
+        state.dateOverlayEnabled.value = !state.dateOverlayEnabled.value
+        composeRule.waitForIdle()
+        assertEquals(1, state.launchedUrls.size)
+    }
+
+    @Test
+    fun launcherFailure_showsExactOpenFailedCopyAndAction() {
+        launch(
+            referenceFile = validReference(),
+            captureFile = validCapture(),
+            initialOperationState = WackelbildOperationState.Ready("https://deinwackelbild.de/checkout/h1", usedFallback = false),
+            initialCustomTabOpenFailure = "https://deinwackelbild.de/checkout/h1"
+        )
+        composeRule.onNodeWithText(context.getString(R.string.wackelbild_custom_tab_open_failed)).assertIsDisplayed()
+        composeRule.onNodeWithTag("wackelbild_custom_tab_open_retry_button").performScrollTo().assertIsDisplayed()
+        composeRule.onNodeWithText(context.getString(R.string.wackelbild_custom_tab_open_retry)).assertIsDisplayed()
+        // The raw checkout URL is never shown as visible text.
+        composeRule.onNodeWithText("https://deinwackelbild.de/checkout/h1").assertDoesNotExist()
+    }
+
+    @Test
+    fun retryOpen_invokesLauncherWithExactSameUrl_noNewOperation() {
+        val state = launch(
+            referenceFile = validReference(),
+            captureFile = validCapture(),
+            initialOperationState = WackelbildOperationState.Ready("https://deinwackelbild.de/checkout/h1", usedFallback = false),
+            initialCustomTabOpenFailure = "https://deinwackelbild.de/checkout/h1"
+        )
+        // Simulate the original failed attempt already having recorded the URL once.
+        state.emitLaunchEvent("https://deinwackelbild.de/checkout/h1")
+        composeRule.waitForIdle()
+
+        composeRule.onNodeWithTag("wackelbild_custom_tab_open_retry_button").performScrollTo().performClick()
+        composeRule.waitForIdle()
+
+        assertEquals(1, state.retryOpenCallCount.value)
+        assertEquals(0, state.startOperationCallCount.value)
+        assertTrue(state.launchedUrls.all { it == "https://deinwackelbild.de/checkout/h1" })
+    }
+
+    @Test
+    fun launchOpenFailure_backNavigatesNormally_noExtraCancelButton() {
+        var backInvoked = false
+        launch(
+            referenceFile = validReference(),
+            captureFile = validCapture(),
+            initialOperationState = WackelbildOperationState.Ready("https://deinwackelbild.de/checkout/h1", usedFallback = false),
+            initialCustomTabOpenFailure = "https://deinwackelbild.de/checkout/h1",
+            onBack = { backInvoked = true }
+        )
+        composeRule.onNodeWithTag("wackelbild_back_button").performClick()
+        composeRule.waitForIdle()
+        assertTrue(backInvoked)
+        composeRule.onNodeWithTag("wackelbild_cancel_transfer_dialog").assertDoesNotExist()
+    }
+
+    @Test
+    fun readyState_showsNoIntermediateSuccessScreen() {
+        launch(
+            referenceFile = validReference(),
+            captureFile = validCapture(),
+            initialOperationState = WackelbildOperationState.Ready("https://deinwackelbild.de/checkout/h1", usedFallback = false)
+        )
+        composeRule.onNodeWithTag("wackelbild_cta_button").assertDoesNotExist()
+        composeRule.onNodeWithTag("wackelbild_loading_spinner").assertDoesNotExist()
+        composeRule.onNodeWithTag("wackelbild_custom_tab_open_failed_text").assertDoesNotExist()
+    }
+
+    @Test
+    fun readyState_dateToggleDisabled() {
+        launch(
+            referenceFile = validReference(),
+            captureFile = validCapture(),
+            isDateOverlayAvailable = true,
+            initialOperationState = WackelbildOperationState.Ready("https://deinwackelbild.de/checkout/h1", usedFallback = false)
+        )
+        composeRule.onNodeWithTag("wackelbild_date_toggle").assertIsNotEnabled()
+    }
+
+    // === Block 11: Accessibility / layout regression =============================================
+
+    @Test
+    fun cta_hasAccessibleClickAction() {
+        launch(referenceFile = validReference(), captureFile = validCapture())
+        composeRule.onNodeWithTag("wackelbild_cta_button")
+            .fetchSemanticsNode()
+            .config
+            .contains(SemanticsActions.OnClick)
+            .let { assertTrue("CTA should expose a click action", it) }
+    }
+
+    @Test
+    fun compactWidth_withOrderArea_screenStillRendersAndReferenceDisplayed() {
+        launch(
+            referenceFile = validReference(),
+            captureFile = validCapture(),
+            windowWidthSizeClass = WindowWidthSizeClass.Compact
+        )
+        composeRule.onNodeWithTag("wackelbild_reference_preview_container").assertIsDisplayed()
+        composeRule.onNodeWithTag("wackelbild_transfer_disclosure").performScrollTo().assertIsDisplayed()
+        composeRule.onNodeWithTag("wackelbild_cta_button").performScrollTo().assertIsDisplayed()
     }
 }

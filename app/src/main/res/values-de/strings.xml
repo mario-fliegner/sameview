@@ -301,6 +301,24 @@
     <string name="wackelbild_accessibility_toggle_action">Bild wechseln</string>
     <string name="wackelbild_date_toggle_label">Datum anzeigen</string>
     <string name="wackelbild_date_unavailable_hint">Referenzdatum hinzufügen, um das Datum anzuzeigen.</string>
+    <string name="wackelbild_transfer_disclosure">Deine beiden Bilder werden zur Gestaltung an DeinWackelbild.de übertragen. Die Bestellung schließt du dort ab.</string>
+    <string name="wackelbild_cta_order">Bestelle dein Wackelbild</string>
+    <string name="wackelbild_loading_preparing">Wackelbild wird vorbereitet …</string>
+    <string name="wackelbild_cancel_transfer_title">Übertragung abbrechen?</string>
+    <string name="wackelbild_cancel_transfer_message">Die Bilder werden gerade an DeinWackelbild.de übertragen.</string>
+    <string name="wackelbild_cancel_transfer_continue">Weiter übertragen</string>
+    <string name="wackelbild_cancel_transfer_stop">Abbrechen</string>
+    <string name="wackelbild_quality_fallback_title">Originalqualität nicht verfügbar</string>
+    <string name="wackelbild_quality_fallback_message">Für diesen Vergleich sind die Originalbilder nicht verfügbar. Dein Wackelbild kann trotzdem mit den vorhandenen Bildern erstellt werden – möglicherweise mit geringerer Druckqualität.</string>
+    <string name="wackelbild_quality_fallback_cancel">Abbrechen</string>
+    <string name="wackelbild_quality_fallback_continue">Trotzdem fortfahren</string>
+    <string name="wackelbild_error_no_internet">Keine Internetverbindung</string>
+    <string name="wackelbild_error_transfer_failed">Übertragung nicht möglich</string>
+    <string name="wackelbild_error_retry">Erneut versuchen</string>
+    <string name="wackelbild_error_preparation_failed">Wackelbild kann nicht erstellt werden</string>
+    <string name="wackelbild_error_integration_unavailable">DeinWackelbild.de ist derzeit nicht verfügbar. Bitte versuche es später erneut.</string>
+    <string name="wackelbild_custom_tab_open_failed">DeinWackelbild.de konnte nicht geöffnet werden.</string>
+    <string name="wackelbild_custom_tab_open_retry">DeinWackelbild.de öffnen</string>
 
     <!-- Vergleich teilen-Screen -->
     <string name="share_comparison_screen_title">Bild teilen</string>

@@ -20,6 +20,7 @@ import java.util.Locale
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.resetMain
@@ -268,6 +269,118 @@ class WackelbildViewModelTest {
 
         assertEquals(WackelbildImageSide.CAPTURE, vm.visibleImage.value)
         assertFalse(vm.swipeOverrideActive)
+    }
+
+    // --- continuous preview blend (§7.7 of the implementation plan) ---
+    // Uses TiltBlendMapper's production defaults (maxUsefulTiltDegrees=24f, emaAlpha=0.2f)
+    // throughout -- exact numeric expectations are worked examples against those defaults, not
+    // arbitrary. TiltBlendMapperTest covers the mapper's own algorithm in isolation; these tests
+    // cover only its wiring into WackelbildViewModel (feed/freeze/seed timing).
+
+    @Test
+    fun previewBlendFraction_initialValue_isHalf() {
+        val (vm, _) = createViewModel()
+        assertEquals(0.5f, vm.previewBlendFraction.value, 0.0001f)
+    }
+
+    @Test
+    fun previewBlendFraction_calibrationOnlyFirstReading_staysAtHalf() {
+        val (vm, tilt) = createViewModel()
+        vm.onScreenActive()
+        tilt.simulateRoll(40f) // calibrates neutral only
+        assertEquals(0.5f, vm.previewBlendFraction.value, 0.0001f)
+    }
+
+    @Test
+    fun previewBlendFraction_liveSensorUpdate_reflectsTilt() {
+        val (vm, tilt) = createViewModel()
+        vm.onScreenActive()
+        tilt.simulateRoll(0f) // calibrates neutral
+        tilt.simulateRoll(15f) // delta 15 -- below this test's 12f discrete threshold is false (15>12), but blend math is independent of the discrete threshold
+        // First-ever mapper feed initializes smoothedDelta directly to 15 (no blend from zero).
+        assertEquals(0.5f + 15f / 48f, vm.previewBlendFraction.value, 0.0001f)
+    }
+
+    @Test
+    fun manualToggle_referenceToCapture_pinsFractionToFullCaptureEndpoint() {
+        val (vm, _) = createViewModel()
+        vm.onSwipeDetected() // REFERENCE -> CAPTURE
+        assertEquals(1f, vm.previewBlendFraction.value, 0.0001f)
+    }
+
+    @Test
+    fun manualToggle_captureToReference_pinsFractionToFullReferenceEndpoint() {
+        val (vm, _) = createViewModel()
+        vm.onSwipeDetected() // -> CAPTURE, fraction 1f
+        vm.onSwipeDetected() // -> REFERENCE, fraction 0f
+        assertEquals(0f, vm.previewBlendFraction.value, 0.0001f)
+    }
+
+    @Test
+    fun previewBlendFraction_frozenWhileOverrideActive_unchangedSensorReadingDoesNotMoveIt() {
+        val (vm, tilt) = createViewModel()
+        vm.onScreenActive()
+        tilt.simulateRoll(0f)
+        tilt.simulateRoll(20f) // sensor drives to CAPTURE, fraction moves off 0.5
+
+        vm.onSwipeDetected() // -> REFERENCE, fraction pinned to 0f
+        assertEquals(0f, vm.previewBlendFraction.value, 0.0001f)
+
+        // No new hysteresis transition fires (same reading) -- the mapper must not be fed at all
+        // while override is active, so the pinned fraction must not move even fractionally.
+        tilt.simulateRoll(20f)
+        assertEquals(0f, vm.previewBlendFraction.value, 0.0001f)
+    }
+
+    @Test
+    fun previewBlendFraction_boundedFirstStepOnReArmRelease_notAJumpToLiveValue() {
+        val (vm, tilt) = createViewModel()
+        vm.onScreenActive()
+        tilt.simulateRoll(0f)
+        tilt.simulateRoll(20f) // sensor -> CAPTURE
+        vm.onSwipeDetected() // -> REFERENCE, fraction pinned to 0f, mapper seeded to -24
+        tilt.simulateRoll(0f) // neutral/re-arm observed
+        tilt.simulateRoll(20f) // new threshold crossing -> sensor control resumes (delta=20)
+
+        assertEquals(WackelbildImageSide.CAPTURE, vm.visibleImage.value) // discrete state, unchanged behavior
+        // 0.2*20 + 0.8*(-24) = -15.2 -> fraction = 0.5 - 15.2/48 ~= 0.1833: a bounded first step
+        // from the pinned 0f, not a jump to the live raw value's own fraction (0.5+20/48~=0.9167).
+        val fraction = vm.previewBlendFraction.value
+        assertEquals(0.1833f, fraction, 0.001f)
+        assertTrue(fraction > 0f)
+        assertTrue(fraction < 0.5f + 20f / 48f)
+    }
+
+    @Test
+    fun previewBlendFraction_retainedAcrossPause_mapperResetOnReactivation_notBlendedWithStaleHistory() {
+        val (vm, tilt) = createViewModel()
+        vm.onScreenActive()
+        tilt.simulateRoll(0f)
+        tilt.simulateRoll(15f) // fraction -> 0.5 + 15/48
+        val beforePause = vm.previewBlendFraction.value
+        assertEquals(0.5f + 15f / 48f, beforePause, 0.0001f)
+
+        vm.onScreenInactive() // resets neutralRoll and the mapper's internal smoothing state
+        assertEquals(beforePause, vm.previewBlendFraction.value, 0.0001f) // exposed value retained, unchanged by pause itself
+
+        vm.onScreenActive()
+        tilt.simulateRoll(50f) // calibration-only first reading post-reactivation
+        assertEquals(beforePause, vm.previewBlendFraction.value, 0.0001f) // still untouched
+
+        tilt.simulateRoll(57f) // delta 7 from the new neutral (50) -- below the 12f discrete threshold, no visibleImage change
+        // If the mapper's history had survived the pause, this would blend with the stale 15f
+        // reading (0.2*7 + 0.8*15 = 13.4 -> ~0.779). reset() makes it a fresh first call instead.
+        assertEquals(0.5f + 7f / 48f, vm.previewBlendFraction.value, 0.0001f)
+    }
+
+    @Test
+    fun previewBlendFraction_neverAffectsDiscreteVisibleImage() {
+        val (vm, tilt) = createViewModel()
+        vm.onScreenActive()
+        tilt.simulateRoll(0f)
+        tilt.simulateRoll(3f) // below the 12f discrete threshold -- moves the continuous fraction slightly, no discrete change
+        assertEquals(WackelbildImageSide.REFERENCE, vm.visibleImage.value)
+        assertEquals(0.5f + 3f / 48f, vm.previewBlendFraction.value, 0.0001f)
     }
 
     // --- lifecycle ---
@@ -651,4 +764,218 @@ class WackelbildViewModelTest {
     // is a single operationJob?.cancel() call, structurally identical to half of cancelOperation(),
     // which is exercised by cancelOperation_duringActiveOperation_resetsToIdle_noReadyEmittedAfter
     // and cancelOperation_whileAwaitingFallback_resetsToIdle above.
+
+    // --- Block 11: Custom Tab launch bookkeeping (exactly-once launch, foreground deferral,
+    // launch-result handling, same-URL retry-open, browser-return reset) ---
+
+    @Test
+    fun readyWhileForeground_emitsExactlyOneLaunchEvent() = runTest {
+        val (vm, _) = createViewModel(
+            apiClient = successfulApiClient(checkoutUrl = "https://deinwackelbild.de/checkout/h1"),
+            renderPrintPair = fakeRenderer()
+        )
+        val received = mutableListOf<String>()
+        val collectJob = launch { vm.launchCustomTabEvent.collect { received.add(it) } }
+
+        vm.onScreenActive()
+        vm.startOperation()
+        advanceUntilIdle()
+
+        assertEquals(listOf("https://deinwackelbild.de/checkout/h1"), received)
+        collectJob.cancel()
+    }
+
+    @Test
+    fun readyWhileBackgrounded_emitsNoLaunchEventImmediately() = runTest {
+        val (vm, _) = createViewModel(apiClient = successfulApiClient(), renderPrintPair = fakeRenderer())
+        val received = mutableListOf<String>()
+        val collectJob = launch { vm.launchCustomTabEvent.collect { received.add(it) } }
+
+        // isScreenForeground stays false -- onScreenActive() is never called.
+        vm.startOperation()
+        advanceUntilIdle()
+
+        assertTrue(received.isEmpty())
+        collectJob.cancel()
+    }
+
+    @Test
+    fun backgroundedReady_emitsExactlyOnceAfterScreenActive() = runTest {
+        val (vm, _) = createViewModel(
+            apiClient = successfulApiClient(checkoutUrl = "https://deinwackelbild.de/checkout/h1"),
+            renderPrintPair = fakeRenderer()
+        )
+        val received = mutableListOf<String>()
+        val collectJob = launch { vm.launchCustomTabEvent.collect { received.add(it) } }
+
+        vm.startOperation()
+        advanceUntilIdle()
+        assertTrue(received.isEmpty())
+
+        vm.onScreenActive()
+        advanceUntilIdle()
+
+        assertEquals(listOf("https://deinwackelbild.de/checkout/h1"), received)
+        collectJob.cancel()
+    }
+
+    @Test
+    fun recompositionEquivalentResume_doesNotDuplicateLaunchEvent() = runTest {
+        val (vm, _) = createViewModel(apiClient = successfulApiClient(), renderPrintPair = fakeRenderer())
+        val received = mutableListOf<String>()
+        val collectJob = launch { vm.launchCustomTabEvent.collect { received.add(it) } }
+
+        vm.startOperation()
+        advanceUntilIdle()
+        vm.onScreenActive()
+        advanceUntilIdle()
+        vm.onScreenActive() // a second resume, e.g. recomposition-driven lifecycle re-observation
+        advanceUntilIdle()
+
+        assertEquals(1, received.size)
+        collectJob.cancel()
+    }
+
+    @Test
+    fun customTabLaunchSucceeds_marksAwaitingReturn_resetsOperationStateToIdle() = runTest {
+        val (vm, _) = createViewModel(
+            apiClient = successfulApiClient(checkoutUrl = "https://deinwackelbild.de/checkout/h1"),
+            renderPrintPair = fakeRenderer()
+        )
+        vm.onScreenActive()
+        vm.startOperation()
+        advanceUntilIdle()
+
+        vm.onCustomTabLaunchResult("https://deinwackelbild.de/checkout/h1", success = true)
+
+        assertEquals(WackelbildOperationState.Idle, vm.operationState.value)
+        assertNull(vm.customTabOpenFailure.value)
+    }
+
+    @Test
+    fun customTabLaunchFails_retainsExactCheckoutUrl() = runTest {
+        val (vm, _) = createViewModel(
+            apiClient = successfulApiClient(checkoutUrl = "https://deinwackelbild.de/checkout/h1"),
+            renderPrintPair = fakeRenderer()
+        )
+        vm.onScreenActive()
+        vm.startOperation()
+        advanceUntilIdle()
+
+        vm.onCustomTabLaunchResult("https://deinwackelbild.de/checkout/h1", success = false)
+
+        assertEquals("https://deinwackelbild.de/checkout/h1", vm.customTabOpenFailure.value)
+    }
+
+    @Test
+    fun retryOpenCheckoutUrl_emitsSameUrl_withoutRerendering() = runTest {
+        var renderCallCount = 0
+        val innerRenderer = fakeRenderer()
+        val (vm, _) = createViewModel(
+            apiClient = successfulApiClient(checkoutUrl = "https://deinwackelbild.de/checkout/h1"),
+            renderPrintPair = { session, output, overlay ->
+                renderCallCount++
+                innerRenderer(session, output, overlay)
+            }
+        )
+        // Collecting from the start so the original Ready-triggered send (from startOperation()
+        // below) is drained too -- otherwise it would sit buffered and be misread as a second
+        // element once retryOpenCheckoutUrl() sends its own.
+        val received = mutableListOf<String>()
+        val collectJob = launch { vm.launchCustomTabEvent.collect { received.add(it) } }
+
+        vm.onScreenActive()
+        vm.startOperation()
+        advanceUntilIdle()
+        assertEquals(listOf("https://deinwackelbild.de/checkout/h1"), received) // the original send, drained
+
+        vm.onCustomTabLaunchResult("https://deinwackelbild.de/checkout/h1", success = false)
+        assertEquals(1, renderCallCount)
+
+        vm.retryOpenCheckoutUrl()
+        advanceUntilIdle()
+
+        assertEquals(
+            listOf("https://deinwackelbild.de/checkout/h1", "https://deinwackelbild.de/checkout/h1"),
+            received
+        )
+        assertEquals(1, renderCallCount) // no re-render, no new operation
+        collectJob.cancel()
+    }
+
+    @Test
+    fun retryOpenCheckoutUrl_withNoPendingFailure_isSafeNoOp() = runTest {
+        val (vm, _) = createViewModel()
+        val received = mutableListOf<String>()
+        val collectJob = launch { vm.launchCustomTabEvent.collect { received.add(it) } }
+
+        vm.retryOpenCheckoutUrl()
+        advanceUntilIdle()
+
+        assertTrue(received.isEmpty())
+        collectJob.cancel()
+    }
+
+    @Test
+    fun browserReturn_resetsVisibleImageToReference() = runTest {
+        val (vm, _) = createViewModel(apiClient = successfulApiClient(), renderPrintPair = fakeRenderer())
+        vm.onScreenActive()
+        vm.startOperation()
+        advanceUntilIdle()
+        val url = (vm.operationState.value as WackelbildOperationState.Ready).checkoutUrl
+        vm.onCustomTabLaunchResult(url, success = true)
+
+        vm.onSwipeDetected() // simulates user interaction with the still-composed screen before return
+        assertEquals(WackelbildImageSide.CAPTURE, vm.visibleImage.value)
+
+        vm.onScreenActive() // the actual Custom Tab return
+        assertEquals(WackelbildImageSide.REFERENCE, vm.visibleImage.value)
+    }
+
+    @Test
+    fun browserReturn_doesNotChangeDateToggleValue() = runTest {
+        val (vm, _) = createViewModel(
+            apiClient = successfulApiClient(),
+            renderPrintPair = fakeRenderer(),
+            metadataReader = { WackelbildDateMetadata("2008-06", 1751359200000L) }
+        )
+        advanceUntilIdle()
+        vm.onDateOverlayToggled(true)
+        assertTrue(vm.dateOverlayEnabled.value)
+
+        vm.onScreenActive()
+        vm.startOperation()
+        advanceUntilIdle()
+        val url = (vm.operationState.value as WackelbildOperationState.Ready).checkoutUrl
+        vm.onCustomTabLaunchResult(url, success = true)
+        vm.onScreenActive() // browser return
+
+        assertTrue(vm.dateOverlayEnabled.value) // value retained, unchanged
+        assertEquals(WackelbildOperationState.Idle, vm.operationState.value) // editable again (Screen derives this)
+    }
+
+    @Test
+    fun browserReturn_clearsAwaitingMarker_laterOrdinaryResumeDoesNothing() = runTest {
+        val (vm, _) = createViewModel(apiClient = successfulApiClient(), renderPrintPair = fakeRenderer())
+        vm.onScreenActive()
+        vm.startOperation()
+        advanceUntilIdle()
+        val url = (vm.operationState.value as WackelbildOperationState.Ready).checkoutUrl
+        vm.onCustomTabLaunchResult(url, success = true)
+
+        vm.onScreenActive() // consumes the return-reset, clears the marker
+        vm.onSwipeDetected() // -> CAPTURE
+        assertEquals(WackelbildImageSide.CAPTURE, vm.visibleImage.value)
+
+        vm.onScreenActive() // an ordinary later resume -- must not reset again
+        assertEquals(WackelbildImageSide.CAPTURE, vm.visibleImage.value)
+    }
+
+    @Test
+    fun ordinaryResume_withoutSuccessfulLaunch_doesNotPerformBrowserReturnReset() = runTest {
+        val (vm, _) = createViewModel()
+        vm.onSwipeDetected() // -> CAPTURE
+        vm.onScreenActive() // ordinary resume -- no operation was ever started
+        assertEquals(WackelbildImageSide.CAPTURE, vm.visibleImage.value)
+    }
 }

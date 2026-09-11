@@ -316,6 +316,24 @@
     <string name="wackelbild_accessibility_toggle_action">Switch image</string>
     <string name="wackelbild_date_toggle_label">Show date</string>
     <string name="wackelbild_date_unavailable_hint">Add a reference date to show the date.</string>
+    <string name="wackelbild_transfer_disclosure">Your two images are sent to DeinWackelbild.de to create your print. You complete the order there.</string>
+    <string name="wackelbild_cta_order">Order your lenticular print</string>
+    <string name="wackelbild_loading_preparing">Preparing your lenticular print …</string>
+    <string name="wackelbild_cancel_transfer_title">Cancel transfer?</string>
+    <string name="wackelbild_cancel_transfer_message">Your images are currently being sent to DeinWackelbild.de.</string>
+    <string name="wackelbild_cancel_transfer_continue">Keep transferring</string>
+    <string name="wackelbild_cancel_transfer_stop">Cancel</string>
+    <string name="wackelbild_quality_fallback_title">Original quality not available</string>
+    <string name="wackelbild_quality_fallback_message">The original images aren\'t available for this comparison. Your lenticular print can still be created using the available images, possibly at lower print quality.</string>
+    <string name="wackelbild_quality_fallback_cancel">Cancel</string>
+    <string name="wackelbild_quality_fallback_continue">Continue anyway</string>
+    <string name="wackelbild_error_no_internet">No internet connection</string>
+    <string name="wackelbild_error_transfer_failed">Transfer not possible</string>
+    <string name="wackelbild_error_retry">Try again</string>
+    <string name="wackelbild_error_preparation_failed">This lenticular print can\'t be created</string>
+    <string name="wackelbild_error_integration_unavailable">DeinWackelbild.de is currently unavailable. Please try again later.</string>
+    <string name="wackelbild_custom_tab_open_failed">DeinWackelbild.de couldn\'t be opened.</string>
+    <string name="wackelbild_custom_tab_open_retry">Open DeinWackelbild.de</string>
 
     <!-- Share Comparison Image screen -->
     <string name="share_comparison_screen_title">Share image</string>

@@ -207,8 +207,8 @@ The preview:
 - is intentionally not expanded to the maximum possible screen size;
 - has comfortable surrounding space;
 - has no decorative frame;
-- has no simulated physical-product frame;
-- has no 3D effect;
+- has no simulated physical-product frame, except the subtle vertical lenticular ridge surface defined in §8.10, which communicates the behavior/material of the intended lenticular product rather than adding a decorative frame;
+- has a subtle perspective tilt effect coupled to device tilt, as defined in §8.9 — this supersedes the earlier absolute "no 3D effect" rule;
 - has no SameView slider;
 - has no image-state labels.
 
@@ -220,20 +220,26 @@ The screen must remain responsive according to the existing SameView responsive-
 
 ### 8.1 Core behavior
 
-The preview approximates the real lenticular viewing behavior by switching clearly between the two images.
+The preview approximates the real lenticular viewing behavior by continuously blending between the two images according to device tilt, rather than switching cleanly between two fixed states.
 
-There is:
+Both Reference and Capture are visible simultaneously, with their relative visual dominance varying continuously:
 
-- no fade,
-- no crossfade,
-- no blended transition region,
-- no slider reveal,
-- no partial image state,
-- no transition animation,
+- at the calibrated neutral orientation, Reference and Capture are visible at approximately 50/50;
+- tilting toward Reference continuously increases Reference dominance and decreases Capture dominance;
+- tilting toward Capture continuously increases Capture dominance and decreases Reference dominance;
+- at the useful maximum tilt in either direction, the corresponding image should be dominant to the point that the opposite image is effectively or nearly invisible;
+- returning toward neutral continuously returns toward approximately 50/50;
+- the transition is continuous at all times — there is no hard A/B switch as the primary tilt behavior;
+- sensor noise around a stable orientation must not cause visible flicker or nervous oscillation.
+
+There is still:
+
 - no haptic feedback,
 - no sound.
 
-The visible image switches directly between Reference and Capture.
+This is not a manually draggable slider and not a viewing-angle control (§7, §55): the blend is driven only by device tilt (§8.3), or by a discrete manual swipe/accessibility selection, which always resolves to a full endpoint rather than an intermediate blend (§8.4, §8.5, §8.7).
+
+The exact mapping curve, useful maximum tilt, and filtering/smoothing constants are implementation details and are not specified normatively here.
 
 ### 8.2 Initial state
 
@@ -247,16 +253,15 @@ After returning from the Custom Tab to the still-existing Wackelbild screen, the
 
 When suitable motion-sensor hardware is available:
 
-- a small deliberate left/right device tilt switches between the two images;
+- a left/right device tilt continuously drives the image blend described in §8.1;
 - the neutral position is relative to the device posture when the preview/sensor interaction is initialized;
 - the user is not required to hold the device at a specific absolute angle;
-- normal hand jitter must not cause repeated switching;
-- implementation may use fixed thresholds/hysteresis solely to stabilize the direct switch;
-- there must still be no visible transition region or fade;
+- normal hand jitter around a stable orientation must not cause visible flicker or nervous oscillation in the blend;
+- implementation may apply filtering, smoothing, and/or a small dead zone around neutral solely to stabilize the continuous blend against sensor noise;
 - left/right must remain intuitive relative to the current display orientation;
 - after device rotation, the neutral orientation is recalibrated appropriately.
 
-Exact thresholds are an implementation/tuning detail and require real-device validation.
+The exact mapping curve, useful maximum tilt, and filtering/smoothing constants are an implementation/tuning detail and require real-device validation.
 
 No additional Android runtime permission is required for this interaction.
 
@@ -264,7 +269,7 @@ No additional Android runtime permission is required for this interaction.
 
 Horizontal swiping over the preview is always available, including on devices with a suitable sensor.
 
-Each clearly horizontal swipe toggles to the other image:
+Each clearly horizontal swipe selects the full opposite endpoint of the blend described in §8.1 (approximately 100% Reference / 0% Capture, or approximately 0% Reference / 100% Capture) — never an intermediate blend value:
 
 ```text
 Reference → swipe → Capture → swipe → Reference
@@ -278,11 +283,11 @@ Vertical gestures are reserved for screen scrolling and must not trigger an imag
 
 ### 8.5 Sensor/swipe arbitration
 
-A manual swipe must not be immediately undone by an unchanged sensor reading.
+A manual swipe or accessibility selection must not be immediately undone by an unchanged sensor reading.
 
-After a swipe:
+After a manual selection:
 
-- the manually selected image remains visible;
+- the manually selected endpoint (§8.4, §8.7) remains visible;
 - the existing unchanged tilt state does not immediately override it;
 - sensor control resumes only after a new sufficiently clear tilt movement is detected.
 
@@ -308,7 +313,9 @@ with the same supporting copy.
 
 Users must not be required to physically tilt the device.
 
-The always-available swipe behavior and appropriate accessibility semantics/actions must provide an alternative way to switch the preview.
+The always-available swipe behavior and appropriate accessibility semantics/actions must provide an alternative way to switch the preview, resolving to the same full endpoint behavior defined in §8.4.
+
+For accessibility purposes, the preview exposes a deterministic, discrete semantic identity of the currently dominant/selected side (Reference or Capture). Continuous blend percentage changes driven by tilt (§8.1) are not required to be announced.
 
 Do not add a separate visible accessibility mode or setting for this feature.
 
@@ -323,6 +330,40 @@ Sensor observation exists only for the local interactive preview.
 - do not persist motion data;
 - do not log motion data;
 - do not transmit motion data.
+
+### 8.9 Perspective tilt
+
+The complete visible preview surface reacts subtly to the same relevant device tilt used for the blend in §8.1, so it appears as though a small physical print is being tilted in space.
+
+- the side rotating away from the viewer appears slightly smaller/compressed;
+- reversing the tilt mirrors the effect;
+- the effect corresponds naturally to the same tilt direction used for the image blend (§8.1);
+- the effect remains deliberately subtle, supporting the physical-print impression rather than becoming a prominent animation.
+
+This is not:
+
+- a dramatic card-flip animation;
+- a large or exaggerated 3D rotation;
+- a strongly trapezoidal distortion;
+- a free-form manipulation gesture.
+
+It never changes the stored image geometry or the alignment used by the actual transfer/upload pipeline (§16, §17) — this is a local preview-only rendering effect.
+
+The specific rendering technique used to achieve this perceptual result is an implementation detail and is not specified normatively here.
+
+### 8.10 Lenticular ridge overlay
+
+The preview includes a very subtle vertical surface structure that visually suggests the ridges/lenses of a physical lenticular print.
+
+- ridges/lines are vertical;
+- they remain visually subtle;
+- they are distributed consistently across the visible preview;
+- they must not significantly darken or obscure either photograph;
+- they must not resemble a strong grid, barcode, technical alignment overlay, or distracting moiré pattern.
+
+This is a preview-only visual surface effect. It must never be rendered into `reference.jpg`, `capture.jpg`, session originals, transfer/upload images, Share Comparison output, video output, or any other persisted image asset (§16, §21).
+
+This is the one explicit exception to §7's "no simulated physical-product frame" rule: it communicates the behavior/material of the intended lenticular product rather than adding a decorative frame around the preview.
 
 ---
 
@@ -1424,7 +1465,7 @@ A V1 UX implementation is acceptable only if all of the following hold:
 1. A regular saved Comparison exposes **"Wackelbild erstellen"** under the existing Share menu after Share Image and Share Video with a divider.
 2. Opening the screen performs no network request.
 3. Reference is initially visible.
-4. Tilt switches directly between Reference and Capture without fade/animation.
+4. Tilting continuously shifts Reference/Capture dominance, with approximately 50/50 at calibrated neutral orientation and no hard A/B visual switch during normal tilt interaction, per §8.1/§8.3.
 5. Horizontal swipe toggles the image and works without sensor hardware.
 6. Vertical scrolling does not accidentally switch images.
 7. Swipe is not immediately undone by an unchanged tilt reading.
@@ -1611,7 +1652,8 @@ Do not expand V1 into any of the following without a new explicit product decisi
 - image-position editor,
 - quality selector,
 - orientation selector,
-- sensor-sensitivity setting.
+- sensor-sensitivity setting,
+- viewing-angle / `Blickwinkel` slider or bar (as used on deinwackelbild.de).
 
 ---
 
