@@ -830,7 +830,6 @@ class WackelbildScreenTest {
         launch(referenceFile = tallPortraitImage(), captureFile = tallPortraitImage())
         composeRule.waitForIdle()
         composeRule.onNodeWithTag("wackelbild_hint_title").assertIsDisplayed()
-        composeRule.onNodeWithTag("wackelbild_hint_subtitle").assertIsDisplayed()
     }
 
     // --- CTA fits without routine scrolling (remaining-height-aware preview sizing) ---
@@ -864,48 +863,36 @@ class WackelbildScreenTest {
         composeRule.onNodeWithTag("wackelbild_cta_button").assertIsDisplayed()
     }
 
-    // --- Date-group -> interaction-hint-group 16.dp spacing ---
+    // --- Preview -> interaction-hint -> date-group spacing (hint now sits above the date group) ---
 
     @Test
-    fun dateGroupToHintGroup_spacingIsApproximatelySixteenDp_helperPresent() {
-        // No reference-date helper text ("wackelbild_date_unavailable_hint") has no padding
-        // modifier of its own, so its reported bottom bound corresponds exactly to its true
-        // visual bottom edge -- the gap to the hint title's top is the new spacer, undiluted.
-        launch(
-            referenceFile = validReference(),
-            captureFile = validCapture(),
-            isDateOverlayAvailable = false
-        )
+    fun previewToHintGap_isApproximatelySixteenDp() {
+        // No spacer is added here -- the gap is entirely the preview's own existing
+        // Modifier.padding(16.dp) (predating this fix, unrelated to the hint), since
+        // "wackelbild_reference_preview_container" is tightly sized to effectiveWidth/
+        // effectiveHeight and sits inside that padding, not at its outer edge.
+        launch(referenceFile = validReference(), captureFile = validCapture())
         composeRule.waitForIdle()
-        val groupBottom = composeRule.onNodeWithTag("wackelbild_date_unavailable_hint")
+        val previewBottom = composeRule.onNodeWithTag("wackelbild_reference_preview_container")
             .getUnclippedBoundsInRoot().bottom.value
         val hintTop = composeRule.onNodeWithTag("wackelbild_hint_title")
             .getUnclippedBoundsInRoot().top.value
-        assertEquals(16f, hintTop - groupBottom, 3f)
+        assertEquals(16f, hintTop - previewBottom, 3f)
     }
 
     @Test
-    fun dateGroupToHintGroup_spacingIsApproximatelySixteenDp_helperAbsent() {
-        // SettingsSwitchRow's own testTag is chained AFTER its `padding(vertical = 8.dp)`
-        // modifier -- the same ordering already documented (and proven empirically) at
-        // WackelbildDateBadge in WackelbildScreen.kt as reporting bounds that exclude the
-        // padding applied outside the tagged node. The toggle row's own trailing 8.dp of
-        // padding is therefore not included in "wackelbild_date_toggle"'s reported bottom bound,
-        // so the true on-screen gap to the hint title (the new 16.dp spacer, sitting after that
-        // untagged 8.dp of padding) reads as approximately 24.dp here, not 16.dp -- a measurement
-        // artifact of this pre-existing, unrelated component, not a different spacer value.
-        launch(
-            referenceFile = validReference(),
-            captureFile = validCapture(),
-            isDateOverlayAvailable = true,
-            referenceDateBadgeText = "2008"
-        )
+    fun hintToDateGroup_spacingIsApproximatelySixteenDp() {
+        // The hint now sits directly below the preview and above the date-toggle row --
+        // unconditionally, regardless of whether the date-unavailable helper text later renders
+        // below the toggle. Only one variant is needed (unlike the old date-group -> hint
+        // ordering, where the hint's neighbor above it depended on helper visibility).
+        launch(referenceFile = validReference(), captureFile = validCapture())
         composeRule.waitForIdle()
-        val groupBottom = composeRule.onNodeWithTag("wackelbild_date_toggle")
+        val hintBottom = composeRule.onNodeWithTag("wackelbild_hint_title")
             .getUnclippedBoundsInRoot().bottom.value
-        val hintTop = composeRule.onNodeWithTag("wackelbild_hint_title")
+        val dateGroupTop = composeRule.onNodeWithTag("wackelbild_date_toggle")
             .getUnclippedBoundsInRoot().top.value
-        assertEquals(24f, hintTop - groupBottom, 4f)
+        assertEquals(16f, dateGroupTop - hintBottom, 3f)
     }
 
     // --- Date badge position (Block 4C/4D layout fix) ---

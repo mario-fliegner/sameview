@@ -395,6 +395,11 @@ internal fun WackelbildScreenContent(
                         .fillMaxWidth()
                         .padding(16.dp)
                 )
+                WackelbildInteractionHint(
+                    isSensorAvailable = isSensorAvailable,
+                    modifier = Modifier.widthIn(max = contentMaxWidth)
+                )
+                Spacer(modifier = Modifier.height(16.dp))
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -409,8 +414,6 @@ internal fun WackelbildScreenContent(
                         enabled = isDateToggleEditable,
                         onCheckedChange = onDateOverlayToggled
                     )
-                    Spacer(modifier = Modifier.height(16.dp))
-                    WackelbildInteractionHint(isSensorAvailable = isSensorAvailable)
                     Spacer(modifier = Modifier.height(16.dp))
                     Text(
                         text = stringResource(R.string.wackelbild_transfer_disclosure),
@@ -903,14 +906,9 @@ private fun WackelbildInteractionHint(isSensorAvailable: Boolean, modifier: Modi
                     R.string.wackelbild_hint_swipe_title
                 }
             ),
-            style = MaterialTheme.typography.titleMedium,
+            style = MaterialTheme.typography.bodySmall,
+            color = SameViewSettingsSecondaryText,
             modifier = Modifier.testTag("wackelbild_hint_title")
-        )
-        Spacer(modifier = Modifier.height(4.dp))
-        Text(
-            text = stringResource(R.string.wackelbild_hint_subtitle),
-            style = MaterialTheme.typography.bodyMedium,
-            modifier = Modifier.testTag("wackelbild_hint_subtitle")
         )
     }
 }

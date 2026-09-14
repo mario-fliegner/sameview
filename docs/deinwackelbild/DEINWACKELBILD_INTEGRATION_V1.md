@@ -299,15 +299,9 @@ If suitable sensor control is available, the primary hint is:
 
 **"Handy leicht neigen"**
 
-with supporting copy:
-
-**"Sieh dir dein Wackelbild an."**
-
 If suitable sensor control is unavailable, do not show a hardware/error message. Replace the interaction hint with:
 
 **"Über das Bild wischen"**
-
-with the same supporting copy.
 
 ### 8.7 Accessibility
 
@@ -515,13 +509,13 @@ The ON/OFF toggle is the only date-overlay control.
 
 ### 9.9 Toggle placement
 
-The **"Datum anzeigen"** row is placed directly below the image preview.
+The subtle interaction hint (§8.6) is placed directly below the image preview. It is visually subordinate to the preview — centered, small body text, secondary text color — not a section heading.
+
+The **"Datum anzeigen"** row follows below the interaction hint.
 
 It is a simple SameView-style row with the toggle on the right.
 
 Do not wrap it in a special Options card or create a separate editor section.
-
-The interaction hint follows below the date row.
 
 ### 9.10 Ordering-state freeze
 
@@ -1410,7 +1404,6 @@ The following German product wording has been explicitly approved in this UX dec
 - **Wackelbild erstellen**
 - **Datum anzeigen**
 - **Handy leicht neigen**
-- **Sieh dir dein Wackelbild an.**
 - sensor fallback: **Über das Bild wischen**
 
 ### External transfer

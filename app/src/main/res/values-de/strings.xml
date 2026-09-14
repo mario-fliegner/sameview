@@ -297,7 +297,6 @@
     <string name="wackelbild_preview_error_body">Das Referenzbild für diesen Vergleich konnte nicht geladen werden.</string>
     <string name="wackelbild_hint_tilt_title">Handy leicht neigen</string>
     <string name="wackelbild_hint_swipe_title">Über das Bild wischen</string>
-    <string name="wackelbild_hint_subtitle">Sieh dir dein Wackelbild an.</string>
     <string name="wackelbild_accessibility_toggle_action">Bild wechseln</string>
     <string name="wackelbild_date_toggle_label">Datum anzeigen</string>
     <string name="wackelbild_date_unavailable_hint">Referenzdatum hinzufügen, um das Datum anzuzeigen.</string>
