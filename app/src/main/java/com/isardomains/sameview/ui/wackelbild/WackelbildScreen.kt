@@ -5,6 +5,7 @@ import android.content.Context
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -82,7 +83,12 @@ import kotlinx.coroutines.flow.Flow
 
 // Reuses CreateVideoScreen's own calibrated "media preview sharing a content column with
 // sibling controls" ratio (see CreateVideoScreen.kt's `maxCardHeight = maxHeight * 0.62f`) — not
-// a newly invented value.
+// a newly invented value. Acts as a secondary upper-bound ceiling only: the primary bound is the
+// height actually remaining after the lower controls stack has claimed its own natural height
+// (see the preview's `Modifier.weight(1f, fill = false)` call site below and
+// `WackelbildPreview`'s `effectiveHeight` calculation) — this constant only prevents the preview
+// from growing unreasonably large on layouts where much more vertical space happens to remain
+// than the controls stack actually needs.
 private const val PREVIEW_HEIGHT_FRACTION_OF_CONTENT = 0.62f
 private const val SWIPE_THRESHOLD_DP = 24
 private val DATE_BADGE_CORNER_RADIUS = 6.dp
@@ -103,7 +109,13 @@ private const val PERSPECTIVE_CAMERA_DISTANCE_FACTOR = 8f
 // DEINWACKELBILD_INTEGRATION_V1.md §8.10 -- not one of the four values explicitly pre-approved,
 // added here only because Kotlin requires concrete constants; equally open to real-device tuning.
 private val RIDGE_LINE_SPACING = 6.dp
-private const val RIDGE_LINE_ALPHA = 0.06f
+private const val RIDGE_LINE_ALPHA = 0.10f
+
+// TODO(real-device tuning): outer preview edge, deliberately subtle per
+// DEINWACKELBILD_INTEGRATION_V1.md §8.11 -- open to real-device tuning.
+private val PREVIEW_BORDER_WIDTH = 1.dp
+private val PREVIEW_BORDER_COLOR = Color.White.copy(alpha = 0.85f)
+private val PREVIEW_CORNER_RADIUS = 6.dp
 
 /** Test-observability-only custom semantics property carrying the current continuous preview
  * blend fraction (§7.7). Never read by TalkBack (an unknown custom key is not announced by
@@ -369,14 +381,22 @@ internal fun WackelbildScreenContent(
                     availableContentHeight = availableContentHeight,
                     onSwipeDetected = onSwipeDetected,
                     onAccessibilityToggle = onAccessibilityToggle,
+                    // weight(1f, fill = false): the preview receives only whatever height remains
+                    // after the lower controls Column below (now non-weighted) has already
+                    // claimed its own natural height — it is not forced to consume all of that
+                    // remainder (fill = false), only bounded by it. This is the mechanism named
+                    // in DEINWACKELBILD_IMPLEMENTATION_PLAN_V1.md §6.3 and lets
+                    // WackelbildPreview's own effectiveHeight calculation read the true
+                    // remaining-height constraint directly from Compose's own layout pass,
+                    // without a second measurement pass or new state.
                     modifier = Modifier
+                        .weight(1f, fill = false)
                         .widthIn(max = contentMaxWidth)
                         .fillMaxWidth()
                         .padding(16.dp)
                 )
                 Column(
                     modifier = Modifier
-                        .weight(1f)
                         .fillMaxWidth()
                         .verticalScroll(rememberScrollState())
                         .widthIn(max = contentMaxWidth)
@@ -389,6 +409,7 @@ internal fun WackelbildScreenContent(
                         enabled = isDateToggleEditable,
                         onCheckedChange = onDateOverlayToggled
                     )
+                    Spacer(modifier = Modifier.height(16.dp))
                     WackelbildInteractionHint(isSensorAvailable = isSensorAvailable)
                     Spacer(modifier = Modifier.height(16.dp))
                     Text(
@@ -597,14 +618,23 @@ private fun WackelbildPreview(
 
     BoxWithConstraints(modifier = modifier) {
         val availableW = maxWidth
+        // Secondary ceiling only (see PREVIEW_HEIGHT_FRACTION_OF_CONTENT's own doc comment) —
+        // `maxHeight` below (this BoxWithConstraints' own incoming height constraint) is the
+        // primary bound, and already reflects the space remaining after the lower controls stack
+        // claimed its natural height, via the `Modifier.weight(1f, fill = false)` applied at this
+        // composable's call site.
         val maxPreviewHeight = availableContentHeight * PREVIEW_HEIGHT_FRACTION_OF_CONTENT
         val heightFromWidth = availableW / referenceRatio
-        val effectiveHeight = heightFromWidth.coerceAtMost(maxPreviewHeight)
+        val effectiveHeight = heightFromWidth.coerceAtMost(maxHeight).coerceAtMost(maxPreviewHeight)
         // Recomputed from the (possibly capped) height, never left at the full availableW —
         // this is what guarantees the box below always matches the image's own aspect ratio,
         // whether or not the height cap engaged, so the badge anchored inside it never lands in
         // unused letterbox space.
         val effectiveWidth = effectiveHeight * referenceRatio
+
+        // Shared shape for both the outer border and the inner content clip (spec §8.11) --
+        // reusing one value avoids double-rounding drift between the two.
+        val previewShape = RoundedCornerShape(PREVIEW_CORNER_RADIUS)
 
         // This outer BoxWithConstraints is forced to the full lane width by the caller's
         // `fillMaxWidth()` (so there is comfortable centered space around a narrower/capped
@@ -624,11 +654,16 @@ private fun WackelbildPreview(
                     rotationY = (previewBlendFraction - 0.5f) * 2f * PERSPECTIVE_MAX_ROTATION_DEGREES
                     cameraDistance = PERSPECTIVE_CAMERA_DISTANCE_FACTOR * density
                 }
+                // Subtle neutral outer edge (spec §8.11), drawn as part of this same
+                // graphicsLayer-transformed node so it rotates/scales with the preview rather than
+                // staying fixed to the screen. Drawn within the existing bounds (no added padding).
+                .border(PREVIEW_BORDER_WIDTH, PREVIEW_BORDER_COLOR, previewShape)
                 .testTag("wackelbild_reference_preview_container")
         ) {
             Box(
                 modifier = Modifier
                     .fillMaxSize()
+                    .clip(previewShape)
                     .pointerInput(Unit) {
                         val thresholdPx = SWIPE_THRESHOLD_DP.dp.toPx()
                         var totalDx = 0f

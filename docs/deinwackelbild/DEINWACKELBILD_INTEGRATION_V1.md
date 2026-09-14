@@ -206,7 +206,7 @@ The preview:
 - is centered;
 - is intentionally not expanded to the maximum possible screen size;
 - has comfortable surrounding space;
-- has no decorative frame;
+- has no decorative frame, except the subtle outer preview edge defined in §8.11, used solely to make the perspective tilt (§8.9) visually legible against dark content/background — it is a thin neutral edge, not a thick decorative card frame and not branding, and is preview-only;
 - has no simulated physical-product frame, except the subtle vertical lenticular ridge surface defined in §8.10, which communicates the behavior/material of the intended lenticular product rather than adding a decorative frame;
 - has a subtle perspective tilt effect coupled to device tilt, as defined in §8.9 — this supersedes the earlier absolute "no 3D effect" rule;
 - has no SameView slider;
@@ -364,6 +364,21 @@ The preview includes a very subtle vertical surface structure that visually sugg
 This is a preview-only visual surface effect. It must never be rendered into `reference.jpg`, `capture.jpg`, session originals, transfer/upload images, Share Comparison output, video output, or any other persisted image asset (§16, §21).
 
 This is the one explicit exception to §7's "no simulated physical-product frame" rule: it communicates the behavior/material of the intended lenticular product rather than adding a decorative frame around the preview.
+
+### 8.11 Preview outer edge
+
+The preview has a thin neutral white/light outline and small rounded corners.
+
+- the outline is thin and neutral (white/light), not a SameView accent-colored border;
+- the preview's corners are subtly rounded, using the same rounded shape for both the outline and the clipped photo content (no double-rounding);
+- its sole purpose is visual: making the existing perspective tilt (§8.9) easier to perceive, particularly for dark photographs against SameView's dark background, where the preview edge would otherwise visually disappear;
+- the outline and the rounded content move/tilt together as one preview surface — it is not fixed to the screen while the preview tilts;
+- there is no shadow, elevation, or glow;
+- this is not a thick decorative card frame and not branding.
+
+This is a preview-only visual surface effect. It must never be rendered into `reference.jpg`, `capture.jpg`, session originals, partner upload/transfer images, Share Comparison output, video output, or any other persisted image asset (§16, §21).
+
+This is the exception referenced in §7's "no decorative frame" rule; it is a separate exception from §8.10's "no simulated physical-product frame" exception above.
 
 ---
 
@@ -1379,6 +1394,8 @@ Requirements include:
 - preview remains intentionally moderate in size instead of automatically filling all available width/height;
 - screen may scroll where required;
 - vertical scrolling must coexist correctly with horizontal preview swipes.
+
+On normal compact-phone layouts, preview height must be bounded so the complete primary interaction stack, including the order CTA, fits within the viewport without routine scrolling for portrait source images. The full preview image remains visible, its aspect ratio is preserved, and no crop is introduced. Existing responsive width constraints continue to apply unchanged. Scrolling remains available as a fallback for large font scale, accessibility needs, genuinely short-height windows, or other layouts that are otherwise physically constrained. On larger/Expanded layouts, the preview must not be artificially shrunk merely to force a compact-looking layout when sufficient vertical space is available.
 
 The exact compact/medium/expanded behavior must be derived from the authoritative responsive-layout specification and current implementation.
 

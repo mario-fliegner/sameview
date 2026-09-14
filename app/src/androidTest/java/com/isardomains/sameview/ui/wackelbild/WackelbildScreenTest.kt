@@ -833,6 +833,81 @@ class WackelbildScreenTest {
         composeRule.onNodeWithTag("wackelbild_hint_subtitle").assertIsDisplayed()
     }
 
+    // --- CTA fits without routine scrolling (remaining-height-aware preview sizing) ---
+
+    @Test
+    fun cta_isDisplayedWithoutScrolling_forTallPortraitImage_noReferenceDate() {
+        // Worst-case lower stack: no reference date means the extra
+        // "Add a reference date to show the date." helper line is present, in addition to the
+        // tallest/most constraining preview case.
+        launch(referenceFile = tallPortraitImage(), captureFile = tallPortraitImage())
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("wackelbild_cta_button").assertIsDisplayed()
+    }
+
+    @Test
+    fun cta_isDisplayedWithoutScrolling_forTallPortraitImage_withReferenceDate() {
+        launch(
+            referenceFile = tallPortraitImage(),
+            captureFile = tallPortraitImage(),
+            isDateOverlayAvailable = true,
+            referenceDateBadgeText = "2008"
+        )
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("wackelbild_cta_button").assertIsDisplayed()
+    }
+
+    @Test
+    fun cta_isDisplayedWithoutScrolling_forLandscapeSourceImage() {
+        launch(referenceFile = createJpeg(400, 300), captureFile = createJpeg(400, 300))
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("wackelbild_cta_button").assertIsDisplayed()
+    }
+
+    // --- Date-group -> interaction-hint-group 16.dp spacing ---
+
+    @Test
+    fun dateGroupToHintGroup_spacingIsApproximatelySixteenDp_helperPresent() {
+        // No reference-date helper text ("wackelbild_date_unavailable_hint") has no padding
+        // modifier of its own, so its reported bottom bound corresponds exactly to its true
+        // visual bottom edge -- the gap to the hint title's top is the new spacer, undiluted.
+        launch(
+            referenceFile = validReference(),
+            captureFile = validCapture(),
+            isDateOverlayAvailable = false
+        )
+        composeRule.waitForIdle()
+        val groupBottom = composeRule.onNodeWithTag("wackelbild_date_unavailable_hint")
+            .getUnclippedBoundsInRoot().bottom.value
+        val hintTop = composeRule.onNodeWithTag("wackelbild_hint_title")
+            .getUnclippedBoundsInRoot().top.value
+        assertEquals(16f, hintTop - groupBottom, 3f)
+    }
+
+    @Test
+    fun dateGroupToHintGroup_spacingIsApproximatelySixteenDp_helperAbsent() {
+        // SettingsSwitchRow's own testTag is chained AFTER its `padding(vertical = 8.dp)`
+        // modifier -- the same ordering already documented (and proven empirically) at
+        // WackelbildDateBadge in WackelbildScreen.kt as reporting bounds that exclude the
+        // padding applied outside the tagged node. The toggle row's own trailing 8.dp of
+        // padding is therefore not included in "wackelbild_date_toggle"'s reported bottom bound,
+        // so the true on-screen gap to the hint title (the new 16.dp spacer, sitting after that
+        // untagged 8.dp of padding) reads as approximately 24.dp here, not 16.dp -- a measurement
+        // artifact of this pre-existing, unrelated component, not a different spacer value.
+        launch(
+            referenceFile = validReference(),
+            captureFile = validCapture(),
+            isDateOverlayAvailable = true,
+            referenceDateBadgeText = "2008"
+        )
+        composeRule.waitForIdle()
+        val groupBottom = composeRule.onNodeWithTag("wackelbild_date_toggle")
+            .getUnclippedBoundsInRoot().bottom.value
+        val hintTop = composeRule.onNodeWithTag("wackelbild_hint_title")
+            .getUnclippedBoundsInRoot().top.value
+        assertEquals(24f, hintTop - groupBottom, 4f)
+    }
+
     // --- Date badge position (Block 4C/4D layout fix) ---
 
     @Test
@@ -941,6 +1016,28 @@ class WackelbildScreenTest {
         composeRule.waitForIdle()
         composeRule.onNodeWithTag("wackelbild_screen_root").assertIsDisplayed()
         composeRule.onNodeWithTag("wackelbild_reference_image").assertIsDisplayed()
+    }
+
+    /**
+     * Verifies the Expanded width lane (680.dp `contentMaxWidth`) still composes correctly with
+     * the remaining-height-aware preview sizing for the tallest (portrait-source) case. NOTE:
+     * this only exercises the WIDTH lane override via [WindowWidthSizeClass.Expanded] passed
+     * into the composable under test -- the instrumentation test still runs on the real/emulated
+     * test device's actual window, so it does NOT validate real large-viewport HEIGHT behavior on
+     * a physically large tablet (no tablet managed device exists in this repo's Gradle
+     * `testOptions.managedDevices` config). That remains a manual/emulator validation item.
+     */
+    @Test
+    fun expandedWidth_tallPortraitImage_ctaDisplayedAndScreenComposesCorrectly() {
+        launch(
+            referenceFile = tallPortraitImage(),
+            captureFile = tallPortraitImage(),
+            windowWidthSizeClass = WindowWidthSizeClass.Expanded
+        )
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("wackelbild_screen_root").assertIsDisplayed()
+        composeRule.onNodeWithTag("wackelbild_reference_preview_container").assertIsDisplayed()
+        composeRule.onNodeWithTag("wackelbild_cta_button").assertIsDisplayed()
     }
 
     // === Block 11: CTA / disclosure / consent ===================================================
