@@ -359,6 +359,8 @@ This is a preview-only visual surface effect. It must never be rendered into `re
 
 This is the one explicit exception to §7's "no simulated physical-product frame" rule: it communicates the behavior/material of the intended lenticular product rather than adding a decorative frame around the preview.
 
+The ridges are the topmost visual layer of the inner lenticular preview surface: they continue across the optional date badge (§9) rather than stopping at its edge, preserving the perception of one continuous physical lenticular print surface. This does not change the date badge's own styling, position, or content, and does not extend to the outer preview border (§8.11), which remains a clean, unstriped edge.
+
 ### 8.11 Preview outer edge
 
 The preview has a thin neutral white/light outline and small rounded corners.

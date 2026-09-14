@@ -743,10 +743,6 @@ private fun WackelbildPreview(
                         .alpha(previewBlendFraction)
                         .testTag("wackelbild_capture_image")
                 )
-                // Subtle, static, preview-only vertical lenticular ridge surface (spec §8.10),
-                // layered above both photographs. Never reads previewBlendFraction -- purely a
-                // stateless draw, independent of tilt.
-                WackelbildLenticularRidgeOverlay(modifier = Modifier.fillMaxSize())
                 // A separate wrapping Box for the 8dp image-edge margin, kept structurally apart
                 // from WackelbildDateBadge's own styling modifiers — chaining both the outer
                 // margin and the inner clip/background/padding onto one node made the badge's
@@ -765,6 +761,12 @@ private fun WackelbildPreview(
                         WackelbildDateBadge(text = visibleBadgeText)
                     }
                 }
+                // Subtle, static, preview-only vertical lenticular ridge surface (spec §8.10),
+                // layered above both photographs and, when present, the optional date badge --
+                // the topmost surface of the preview, so the preview reads as one continuous
+                // lenticular print surface. Never reads previewBlendFraction -- purely a
+                // stateless draw, independent of tilt.
+                WackelbildLenticularRidgeOverlay(modifier = Modifier.fillMaxSize())
             }
         }
     }
