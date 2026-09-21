@@ -160,7 +160,7 @@ The preview `Box` owns 100% of the horizontal-drag gesture region and is never a
 **Medium / Expanded:**
 - Same structure, `widthIn(max = 680.dp)` applied to the scrollable content column (matching `ShareComparisonScreen`/`CreateVideoScreen`'s existing constant exactly — **no new max-width value is introduced**).
 - `WackelbildPreview` is NOT stretched to fill the additional available width/height merely because more space exists (spec §44) — its own max-size constraint is independent of and smaller than the 680dp form-width constraint, consistent with spec §7's "comfortable surrounding space" for every width class.
-- Portrait Comparison stays visually Portrait / Landscape Comparison stays visually Landscape — enforced structurally since `WackelbildPreview` renders `reference.jpg`/`capture.jpg` with `ContentScale.Fit` inside a `Box` sized from the session's own viewport aspect ratio (same `sessionViewportRatio`-driven sizing pattern already used by `ShareComparisonViewModel`/`CreateVideoViewModel`), never re-cropped.
+- Portrait Comparison stays visually Portrait / Landscape Comparison stays visually Landscape — enforced structurally. **With a resolved print target** (`WackelbildPrintTarget`, spec §17.1) `WackelbildPreview` sizes its `Box` from the target's orientation-aware aspect and renders `reference.jpg`/`capture.jpg` with the same centered `ContentScale.Crop`, so the preview shows exactly the crop the transfer JPEGs get; the badge, ridges, clip, border, perspective and gesture all stay on that box. **With no target** (`WackelbildPrintTargetState.Resolved(null)`) it keeps the original full-frame behavior: `ContentScale.Fit` inside a `Box` sized from the Reference image's intrinsic aspect ratio, never cropped. While the target is still `Pending` the preview composes nothing, so the full frame never flashes before the crop.
 - Date overlay WYSIWYG: guaranteed by §8.3's shared-geometry design, independent of width class.
 
 **Reusable existing components/constants identified:** `Scaffold`+`TopAppBar` shell pattern, `Column().verticalScroll(rememberScrollState())`, `widthIn(max = 680.dp)` literal, `SettingsCard`/`SettingsSwitchRow` (`SettingsComponents.kt`), `AlertDialog` cancel-confirmation pattern (`CreateVideoScreen.kt`), `sessionViewportRatio`-driven preview sizing pattern (`ShareComparisonViewModel`/`CreateVideoViewModel`), `SameViewAppSurface` color token, `TextMeasurer` usage pattern (`CompareScreen.kt`).
@@ -275,7 +275,7 @@ This is a **product-equivalent, code-different** implementation of the same spec
 | Corner radius | 6dp | `0.0167` |
 | Horizontal padding | 8dp | `0.0222` |
 | Vertical padding | 4dp | `0.0111` |
-| Edge margin | 8dp | `0.0222` |
+| Edge margin | 8dp (preview) | `0.0333` (12/360) for the transfer JPEG only — deliberately larger than the preview's 8dp; see the amendment below |
 | Text size (labelMedium) | 12sp | `0.0333` |
 
 ```kotlin
@@ -283,11 +283,13 @@ val shortEdge = min(canvasW, canvasH)
 val cornerRadiusPx      = shortEdge * 0.0167f
 val paddingHorizontalPx = shortEdge * 0.0222f
 val paddingVerticalPx   = shortEdge * 0.0111f
-val edgeMarginPx        = shortEdge * 0.0222f
+val edgeMarginPx        = shortEdge * 0.0333f   // 12/360, transfer JPEG only; the preview stays 8.dp
 val textSizePx          = shortEdge * 0.0333f
 ```
 
 This is deterministic, requires no dp→px conversion inside the bitmap renderer, has no dependency on device DPI, uses identical fractions for Portrait and Landscape (both keyed off `min(canvasW, canvasH)`), and scales continuously with output resolution — satisfying every requirement of Correction H. The fractions are named constants in `DateBadgeRenderer.kt`, not implementation-time choices.
+
+**Transfer edge-margin amendment (approved).** The embedded transfer-JPEG badge's edge margin is `12/360` (`0.0333`) of the short edge, larger than the `8/360` (`0.0222`) a direct dp-to-fraction derivation would give; the live preview badge keeps its `8.dp` margin (Block 4, unchanged). The reason is the partner side: DeinWackelbild.de displays and crops uploaded images with a small inner inset (observed ≈10 px, ≈1% per side in its configurator), which left the `8/360` margin visibly too tight. The transfer margin is one value for right and bottom and for Portrait and Landscape (still keyed off `min(canvasW, canvasH)`). Preview and transfer remain independently tuned but visually equivalent implementations of the same requirement; the edge safe margin is the one deliberate difference (spec §9.3/§9.6/§20).
 
 **Renderer mechanics:** `canvas.drawRoundRect(...)` (a genuinely new call in this bitmap-renderer family — no existing bitmap-renderer code in this repo currently draws a rounded rect; `Canvas.drawRoundRect` is a standard, low-risk platform API) filled with `Paint().apply { color = 0xFF17202F.toInt() }`, text via `Paint(ANTI_ALIAS_FLAG)` with `color = Color.WHITE`, vertically centered on `Paint.FontMetrics`/`getTextBounds`; `setShadowLayer` **not** called (no shadow — the one deliberate divergence from `CaptionRenderer.makePaint()`, which does use a shadow; `CaptionRenderer.kt` is not modified). Position: bottom-right, `x = canvasW - edgeMarginPx - badgeWidth`, `y = canvasH - edgeMarginPx - badgeHeight`, identical formula for Reference and Capture.
 
@@ -325,7 +327,7 @@ This is the most consequential section. All claims below are grounded in the exa
 
 **Decision: widen exactly three `private fun` methods** in `ShareImageRenderer.kt` to `internal fun`: `decodeHqCapture`, `renderHqReference`, `decodeReferenceFallback`. **`prepareHqCaptureForSbs` is explicitly excluded and stays `private`.** No other change to `ShareImageRenderer.kt` — no logic, no call sites, no signatures beyond the visibility keyword are touched, for exactly these three methods.
 
-**Why `prepareHqCaptureForSbs` is excluded (this corrects the plan's original four-method list):** `prepareHqCaptureForSbs` implements a center-crop-to-fill algorithm that exists specifically to solve the Side-by-side style's *different* problem — a target slot ratio that is deliberately *not* the viewport ratio, because each SxS slot is only half-width. Wackelbild's Capture side never needs a crop at all: per §9.3 Correction A/B, the HQ Capture path performs a direct, uncropped downsample of `capture-original.jpg` (matching Wackelbild's own `ContentScale.Fit` preview, which shows the full uncropped frame), gated by an explicit ratio-tolerance guard rather than any crop-fill logic. Widening a method Wackelbild never calls would be an unjustified increase in `ShareImageRenderer.kt`'s regression surface for no benefit — it is correctly left untouched and `private`.
+**Why `prepareHqCaptureForSbs` is excluded (this corrects the plan's original four-method list):** `prepareHqCaptureForSbs` implements a center-crop-to-fill algorithm that exists specifically to solve the Side-by-side style's *different* problem — a target slot ratio that is deliberately *not* the viewport ratio, because each SxS slot is only half-width. Wackelbild's Capture side never needs a crop at all: per §9.3 Correction A/B, the HQ Capture path performs a direct, uncropped downsample of `capture-original.jpg` (matching Wackelbild's full-frame `ContentScale.Fit` preview when no print target exists; with a target, the uniform spec §17.1 print-format crop is applied afterwards to both sides — §9.6 — never via this SxS helper), gated by an explicit ratio-tolerance guard rather than any crop-fill logic. Widening a method Wackelbild never calls would be an unjustified increase in `ShareImageRenderer.kt`'s regression surface for no benefit — it is correctly left untouched and `private`.
 
 **Why this over the alternatives, explicitly:**
 - **Reuse unchanged (impossible as-is):** the three needed methods are `private`, so a new class cannot call them without a visibility change of some kind.
@@ -383,7 +385,7 @@ val actualRatio   = captureOriginalDims.first.toFloat() / captureOriginalDims.se
 val expectedRatio = dims.width.toFloat() / dims.height
 val relativeError = abs(actualRatio - expectedRatio) / expectedRatio
 if (relativeError > tolerance) {
-    // Genuinely different source ratio — route to the §9.5 case 2 fallback. No crop, no stretch, no guess.
+    // Genuinely different source ratio — route to the §9.5 case 2 fallback. No crop, no stretch, no guess. (Unrelated to the uniform spec §17.1 print-format crop, §9.6, applied later to both sides of any accepted pair.)
 } else {
     // Within the rounding-only tolerance — decodeHqCapture() is a pure proportional resize, safe to use.
 }
@@ -429,6 +431,17 @@ The fallback branch still creates **new** temporary JPEGs from `reference.jpg`/`
 4. If a mathematically safe uniform downscale cannot be constructed for another reason (e.g. one of the two files fails to decode dimensions at all) — this is also `WackelbildPrintFailureReason.PERMANENT_NO_VALID_SOURCE` (§9.5 case 3), never a guessed crop or a stretch.
 
 **This logic is deterministic** — for any given pair of frozen files, exactly one of Case A, B, or C applies, decided purely from their decoded dimensions, with no runtime heuristic or "best effort" branch. **Fresh re-encode discipline is unaffected and still mandatory in every case (A/B/C success paths):** `reference.jpg`/`capture.jpg` are never byte-copied, always decoded and freshly re-encoded via `Bitmap.compress()`; the date badge (if enabled) is drawn into each bitmap before its encode, exactly as in the HQ path (Block 5B/C Correction A) — this is especially load-bearing for `capture.jpg`, which may carry GPS EXIF that a byte-copy would leak (§12).
+
+## 9.6 Print-format crop (WackelbildPrintTarget)
+
+Approved amendment (spec §17.1): the Wackelbild preview and the temporary transfer JPEGs use one deterministic centered crop of the session frame to the selected print format. Stored session images are never cropped or modified.
+
+- **Model:** `image/wackelbild/WackelbildPrintTarget.kt` — pure Kotlin. `select(frameWidth, frameHeight)` picks the family (`10x15` 2:3, `a6` 10.5/14.9, `15x20` 3:4, `15x15` 1:1) with the smallest relative cover-crop loss `max(r, t) / min(r, t)`, `r = short / long`, strict `<` in the fixed family order; `aspect` (orientation-aware width/height), `cropRect(width, height)` (centered, crop only the excess axis, cropped axis made even, `null` when nothing to crop) and `matchesOutput(width, height)` (aspect within 2 px of rounding).
+- **Selection once, before the CTA:** `WackelbildViewModel` resolves the target in `init` from `readSessionViewport(sessionDir)`, requiring `reference.jpg`/`capture.jpg` to match that viewport within one pixel of rounding (else `null`), and exposes `printTargetState` (`Pending` → `Resolved(target?)`). `startOperation` awaits `Resolved` and passes the exact same target `ViewModel → WackelbildHandoffOrchestrator.execute(printTarget) → renderPrintPair(..., printTarget)`. The renderer's lambda type gained a 4th `WackelbildPrintTarget?` parameter for this.
+- **Crop insertion point:** `renderBadgeEncodeRecycle` (the single shared point for the HQ and fallback paths and both sides) crops right after `produceBitmap()` and before the mutable-copy step and `DateBadgeRenderer.draw`, so the badge is positioned against the final cropped output. Both sides are produced at the same `dims`, so `cropRect(dims)` is identical for Reference and Capture. The crop is a 1:1 `Canvas.drawBitmap` of the rectangle into a new mutable bitmap; the full-frame source is recycled as soon as it exists (transient peak ≈ 1 + cropped fraction of one frame, replacing the immutable→mutable copy on the badge path). A bitmap whose size differs from `dims` throws `IOException` (HQ falls back, fallback fails) rather than producing a mismatched pair.
+- **Unchanged:** dimension resolution, the pair-level ≤20 MiB loop (encoded files only get smaller), fallback Case A/B/C rules, OOM handling, metadata stripping, temp-file lifecycle.
+- **Handoff:** `format` is the target's slug; `orientation` comes from the rendered dimensions; with a target the rendered pair must be readable, identical and `matchesOutput` (else `PREPARATION_FAILED` before any network call, before the fallback dialog).
+- **No target:** unknown/untrusted geometry → `null` → full-frame preview and transfer, `format` omitted.
 
 ---
 
@@ -653,8 +666,17 @@ Per the supplied DeinWackelbild V1 API contract (§50), upload connection/write 
 ## 14.1 DTOs (`net/deinwackelbild/DeinWackelbildDtos.kt`)
 
 ```kotlin
-data class CreateHandoffRequest(val partner: String = "sameview", val locale: String? = null)
+data class CreateHandoffRequest(
+    val partner: String = "sameview",
+    val locale: String? = null,
+    val format: String? = null,        // top-level, omitted when null; the selected WackelbildPrintTarget's slug (10x15 | a6 | 15x20 | 15x15, spec §17.1/§32)
+    val orientation: String? = null,   // "portrait" | "landscape", from rendered pixel dimensions; omitted for a square
+    val direction: String? = null      // always "horizontal" when set by the orchestrator
+)
 // external_reference deliberately omitted -- SameView V1 never sends it (spec §27).
+// The three configuration fields are decided by WackelbildHandoffOrchestrator (built once per rendered
+// pair, reused across handoff restarts) -- `format` from the already-selected print target, never
+// re-derived from the rendered dimensions; the DTO only serializes whichever are non-null.
 
 data class CreateHandoffResponse(
     val handoffId: String,
@@ -976,14 +998,15 @@ String resources for each state are listed in §17.1 above (no additional dialog
 | `app/src/main/java/com/isardomains/sameview/MainActivity.kt` | Modify | 2 | New route constants, route builder, `composable()` block, param wiring | **High** — central navigation graph; change is additive, modeled exactly on `ROUTE_SHARE_COMPARISON` |
 | `app/src/main/res/values/strings.xml`, `values-de/strings.xml` | Modify | 1, 4, 5, 7 | New string resources (§17.1) | Low |
 | `app/src/main/java/com/isardomains/sameview/ui/wackelbild/WackelbildScreen.kt` | Create | 2, 3, 4 | ✅ **Implemented.** Screen shell, layout, Back handling, tilt/swipe gesture region (Block 3), Compose date-badge UI (Block 4, `WackelbildDateBadge`) — the gesture region and badge live here directly, not in separate files (Correction D) | Medium |
-| `app/src/main/java/com/isardomains/sameview/ui/wackelbild/WackelbildViewModel.kt` | Create | 2, 3, 4, 8, 9 | ✅ **Implemented (through Block 4).** Full state model (§14.3-§14.5); Block 5 does not modify this file | Medium — grows across blocks |
+| `app/src/main/java/com/isardomains/sameview/ui/wackelbild/WackelbildViewModel.kt` | Create | 2, 3, 4, 8, 9 | ✅ **Implemented (through Block 4).** Full state model (§14.3-§14.5); Block 5 does not modify this file. Later amendment: resolves the print target once (`printTargetState`) and passes it through `startOperation` (§9.6) | Medium — grows across blocks |
 | `app/src/main/java/com/isardomains/sameview/ui/wackelbild/TiltProvider.kt` | Create | 3 | ✅ **Implemented, reusable unchanged.** Raw sensor wrapper (§7.2) — unaffected by the §7.7 preview-contract amendment | Low — narrow, isolated, modeled on proven `CompassProvider` |
 | `app/src/main/java/com/isardomains/sameview/ui/wackelbild/TiltHysteresisStateMachine.kt` | Create | 3 | ✅ **Implemented, reusable for a narrower role.** Pure hysteresis/arbitration logic (§7.3), `THRESHOLD_DEGREES=9f`/`REARM_DEGREES=6f` locked — now used for accessibility semantic identity/manual arbitration only, no longer the primary driver of visual presentation (§7.7) | Medium — genuinely new logic, no precedent |
 | `app/src/main/java/com/isardomains/sameview/ui/wackelbild/DateBadgeFormatter.kt` | Create | 4 | ✅ **Implemented.** Pure date-text formatting (§8.1) — replaces the originally-planned `DateBadgeGeometry.kt`/`DateBadgeOverlay.kt`, which were never created (Correction D) | Low |
 | `app/src/main/java/com/isardomains/sameview/ui/wackelbild/WackelbildTempFileManager.kt` | Create | 5, 6 | `cacheDir` **creation side only** in Block 5; full lifecycle (cleanup paths, sweep) in Block 6 (§11 Correction L) | Medium |
 | `app/src/main/java/com/isardomains/sameview/image/ShareImageRenderer.kt` | Modify | 5 | Widen exactly **3** `private`→`internal` methods (`decodeHqCapture`, `renderHqReference`, `decodeReferenceFallback`) — `prepareHqCaptureForSbs` stays `private`, not needed (§9.2 Correction B) — **no logic change** | **High file, Low change-risk** |
 | `app/src/main/java/com/isardomains/sameview/image/wackelbild/WackelbildDimensionResolver.kt` | Create | 5 | Common-resolution algorithm considering both sources + pair-level size loop (§10) | Medium |
-| `app/src/main/java/com/isardomains/sameview/image/wackelbild/WackelbildPrintRenderer.kt` | Create | 5 | Two-file HQ/fallback pipeline (§9.3) | **High** — core correctness of the feature |
+| `app/src/main/java/com/isardomains/sameview/image/wackelbild/WackelbildPrintRenderer.kt` | Create | 5 | Two-file HQ/fallback pipeline (§9.3). Later amendment: optional `WackelbildPrintTarget` parameter; centered print-format crop before the badge (§9.6) | **High** — core correctness of the feature |
+| `app/src/main/java/com/isardomains/sameview/image/wackelbild/WackelbildPrintTarget.kt` | Create | Print-format amendment | Pure print-format selection (`10x15`/`a6`/`15x20`/`15x15`), orientation-aware aspect, centered `cropRect`, output-aspect verification (§9.6, spec §17.1) | Medium — single source of truth for preview, renderer and handoff |
 | `app/src/main/java/com/isardomains/sameview/image/wackelbild/DateBadgeRenderer.kt` | Create | 5 | Bitmap-side date badge (§8.3) | Medium |
 | `gradle/libs.versions.toml` | Modify | 7, 10 | Add OkHttp + `androidx.browser` versions/coordinates | Medium — first new runtime deps in the app |
 | `app/build.gradle.kts` | Modify | 7, 9, 10 | ✅ **Implemented (Block 9).** Add dependencies (Block 7/10); build-type-gated `buildConfigField` for `DEINWACKELBILD_PARTNER_KEY` (Block 9, §15) | **High** — build/release-critical file |
@@ -1073,7 +1096,7 @@ Ordered to minimize regression risk: pure-UI/navigation shell first (fully testa
   9. If the dimension/quality bound (8 attempts) is exhausted without success, skip to step 12.
   10. (Not reached in the success path.)
   11. Return `WackelbildPrintResult.Success(pair, usedFallback = false)` — the pair produced by the step-5/6/7 loop already contains its final badge-included visual state; there is no separate post-loop badge/re-encode step.
-  12. **Fallback:** decode `reference.jpg`/`capture.jpg`; compute and compare their actual ratios (Block 5B/C Correction B) — if incompatible beyond the fallback ratio-compatibility rule, skip straight to step 13; otherwise apply the Correction J fallback-dimension algorithm (no crop, no stretch, no letterbox ever), draw the date badge into each bitmap before its encode (same badge-before-encode rule as steps 5/6), re-encode; return `WackelbildPrintResult.Success(pair, usedFallback = true)`.
+  12. **Fallback:** decode `reference.jpg`/`capture.jpg`; compute and compare their actual ratios (Block 5B/C Correction B) — if incompatible beyond the fallback ratio-compatibility rule, skip straight to step 13; otherwise apply the Correction J fallback-dimension algorithm (no crop, no stretch, no letterbox ever of an incompatible-ratio pair; the uniform §9.6 print-format crop is applied identically to both bitmaps afterwards), draw the date badge into each bitmap before its encode (same badge-before-encode rule as steps 5/6), re-encode; return `WackelbildPrintResult.Success(pair, usedFallback = true)`.
   13. If fallback decoding itself fails (either frozen file undecodable, ratios incompatible per step 12, or `OutOfMemoryError`, §9.4): return `WackelbildPrintResult.Failure(PERMANENT_NO_VALID_SOURCE)` — no further retry, no coerced crop/stretch/letterbox.
 - **Files:** per §21 (corrected).
 - **Regression risk:** High (core correctness) but isolated — no existing Share Image call site changes.
@@ -1179,7 +1202,7 @@ Dependencies between blocks are respected throughout: no block that requires `IN
 - Exact Capture crop parity (native `capture-original.jpg`, uncropped decode via `decodeHqCapture` — the ratio-tolerance-guard-passed case; no `prepareHqCaptureForSbs`/crop code path is exercised at all, §9.3 Correction A/B).
 - **Fallback dimension/ratio algorithm** (`WackelbildPrintRendererTest` — §9.5 Correction J, ratio-compatibility logic per Block 5B/C Correction B):
   - **Case A — identical frozen dimensions:** re-encoded fresh (never byte-copied), remains valid, optional badge drawn before encode.
-  - **Case B — different dimensions, compatible ratio:** a common no-upscale target is produced from the weaker source, both final outputs have identical dimensions, no crop/stretch/letterbox is applied, badge drawn before encode.
+  - **Case B — different dimensions, compatible ratio:** a common no-upscale target is produced from the weaker source, both final outputs have identical dimensions, no crop/stretch/letterbox of the frozen pair itself is applied (the §9.6 print-format crop, when a target exists, is applied to both afterwards), badge drawn before encode.
   - **Case C — incompatible ratio (beyond `roundingToleranceFor(referenceDims.first, referenceDims.second)`, Block 5E dynamic tolerance):** the renderer returns `WackelbildPrintResult.Failure(PERMANENT_NO_VALID_SOURCE)`, no output pair is produced, and no crop/stretch/letterbox transform is ever attempted — a boundary test (just inside / just outside the derived tolerance) is included, mirroring §9.3's Capture ratio-tolerance boundary test; also a near-mismatch case, e.g. an equivalent of `1080×1920` vs `1088×1920`, must hard-fail rather than stretch.
   - Undecodable frozen source (dimensions unreadable) → `PERMANENT_NO_VALID_SOURCE`, same as Case C.
 - Typed result model (`WackelbildPrintResult`/`WackelbildPrintFailureReason` — §9.3 Correction M: a successful fallback returns `Success(pair, usedFallback = true)`, never a failure value).

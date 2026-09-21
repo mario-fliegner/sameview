@@ -168,6 +168,50 @@ class OkHttpDeinWackelbildApiClientTest {
     }
 
     @Test
+    fun createHandoff_configurationFields_serializedAsExactTopLevelNames() = runTest {
+        val factory = RecordingCallFactory { req -> FakeCall(req, response = fakeResponse(req, 201, validCreateResponseJson())) }
+        val client = OkHttpDeinWackelbildApiClient(factory, partnerKey)
+
+        client.createHandoff(
+            CreateHandoffRequest(format = "18x24", orientation = "portrait", direction = "horizontal"),
+            validIdempotencyKey
+        )
+
+        val body = JSONObject(factory.lastRequest.bodyAsString())
+        assertEquals("18x24", body.getString("format"))
+        assertEquals("portrait", body.getString("orientation"))
+        assertEquals("horizontal", body.getString("direction"))
+        assertFalse(body.has("configuration"))
+    }
+
+    @Test
+    fun createHandoff_nullConfigurationFields_omittedFromBody() = runTest {
+        val factory = RecordingCallFactory { req -> FakeCall(req, response = fakeResponse(req, 201, validCreateResponseJson())) }
+        val client = OkHttpDeinWackelbildApiClient(factory, partnerKey)
+
+        client.createHandoff(CreateHandoffRequest(), validIdempotencyKey)
+
+        val body = JSONObject(factory.lastRequest.bodyAsString())
+        assertEquals("sameview", body.getString("partner"))
+        assertFalse(body.has("format"))
+        assertFalse(body.has("orientation"))
+        assertFalse(body.has("direction"))
+    }
+
+    @Test
+    fun createHandoff_partialConfiguration_onlyNonNullFieldsSerialized() = runTest {
+        val factory = RecordingCallFactory { req -> FakeCall(req, response = fakeResponse(req, 201, validCreateResponseJson())) }
+        val client = OkHttpDeinWackelbildApiClient(factory, partnerKey)
+
+        client.createHandoff(CreateHandoffRequest(orientation = "landscape", direction = "horizontal"), validIdempotencyKey)
+
+        val body = JSONObject(factory.lastRequest.bodyAsString())
+        assertFalse(body.has("format"))
+        assertEquals("landscape", body.getString("orientation"))
+        assertEquals("horizontal", body.getString("direction"))
+    }
+
+    @Test
     fun createHandoff_idempotencyKeyPassedThroughUnchanged() = runTest {
         val factory = RecordingCallFactory { req -> FakeCall(req, response = fakeResponse(req, 201, validCreateResponseJson())) }
         val client = OkHttpDeinWackelbildApiClient(factory, partnerKey)

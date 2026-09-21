@@ -65,11 +65,13 @@ SameView does not show product sizes, product variants, prices, shipping costs, 
 
 The user can first experience a local approximation of the physical lenticular effect before deciding to transfer any image.
 
-### 3.5 Maximum suitable print quality, unchanged composition
+### 3.5 Maximum suitable print quality, one deterministic print-format crop
 
-The print handoff should use the highest suitable real source quality available, but the visible image content must remain exactly consistent with the saved Comparison.
+The print handoff should use the highest suitable real source quality available, and the visible composition of the transfer images must be exactly the composition the SameView preview shows immediately before ordering: the saved Comparison frame, center-cropped to the selected DeinWackelbild print format (§17.1).
 
-Higher quality must never change the visible crop, alignment, orientation, or aspect ratio represented by `reference.jpg` and `capture.jpg`.
+Higher quality must never change that crop, the alignment, the orientation, or the aspect ratio.
+
+The stored `reference.jpg` and `capture.jpg` remain unchanged, uncropped source material. Only the Wackelbild preview and the newly created temporary transfer files use the print crop.
 
 ### 3.6 Existing session files are immutable
 
@@ -199,10 +201,10 @@ These are preview sources only.
 The preview:
 
 - preserves the Comparison orientation;
-- preserves the exact visible image content;
+- preserves the exact content of the stored session images within the shown crop;
 - shows Portrait as Portrait;
 - shows Landscape as Landscape;
-- shows the complete saved Comparison image without introducing another crop;
+- shows the saved Comparison frame center-cropped to the selected print format (§17.1) — exactly the composition that will be transferred — without stretching or letterboxing; when no print format is selected (§17.1) it shows the complete saved Comparison image without any crop;
 - is centered;
 - is intentionally not expanded to the maximum possible screen size;
 - has comfortable surrounding space;
@@ -212,7 +214,7 @@ The preview:
 - has no SameView slider;
 - has no image-state labels.
 
-The screen must remain responsive according to the existing SameView responsive-layout rules. Device rotation must not alter the Comparison crop, image orientation, or content.
+The screen must remain responsive according to the existing SameView responsive-layout rules. Device rotation must not alter the print crop, image orientation, or content.
 
 ---
 
@@ -425,7 +427,7 @@ When the toggle is enabled, the date is rendered immediately as a runtime overla
 
 The preview files themselves are never modified.
 
-The preview is intended to be WYSIWYG with the eventual print rendering for position, styling, and relative scale.
+The preview is intended to be WYSIWYG with the eventual print rendering for position, styling, and relative scale. The one deliberate exception is the date badge's edge safe margin: the transfer JPEG uses a slightly larger proportional margin than the preview (§9.6).
 
 ### 9.4 Date availability
 
@@ -475,6 +477,8 @@ Requirements:
 - consistent right/bottom margin;
 - dimensions and placement scale proportionally with image resolution;
 - Portrait and Landscape follow the same relative rule.
+
+The right/bottom margin is one value, proportional to the image's short edge, identical for right and bottom and for Portrait and Landscape. The transfer JPEG's margin is deliberately slightly larger than the preview badge's, to keep the badge clear of the display/print inset and crop DeinWackelbild.de applies to uploaded images. Preview and transfer otherwise remain visually equivalent in date style, content and relative scale, and in the final print composition.
 
 ### 9.7 Styling
 
@@ -718,7 +722,7 @@ Purpose:
 
 - fast screen opening,
 - lightweight tilt/swipe interaction,
-- exact visual representation of the stored Comparison crop.
+- exact visual representation of the transfer composition: the stored Comparison frame center-cropped to the selected print format (§17.1).
 
 No HQ reconstruction is performed merely by opening the screen.
 
@@ -726,12 +730,14 @@ No HQ reconstruction is performed merely by opening the screen.
 
 Begins only after **"Bestelle dein Wackelbild"**.
 
-It uses the best suitable original sources available to create the highest useful real print quality while reproducing exactly the same visible content represented by:
+It uses the best suitable original sources available to create the highest useful real print quality while reproducing exactly the composition shown in the preview: the Comparison frame represented by
 
 - `reference.jpg`
 - `capture.jpg`
 
-The original sources are quality sources only. They must not change the visual composition.
+center-cropped to the selected print format (§17.1).
+
+The original sources are quality sources only. They must not change the visual composition (frame, alignment, or crop).
 
 SameView's existing high-quality Share Image reconstruction logic — which independently reconstructs Reference and Capture at higher quality with exact crop/alignment parity — is a validated architectural building block for this requirement. However, the Wackelbild print/transfer pipeline has a different output requirement than that existing feature: two independent JPEG files rather than one composited share image. Implementing this handoff therefore requires new integration work; it is not achieved merely by calling the existing Share Image export unchanged.
 
@@ -741,23 +747,48 @@ SameView's existing high-quality Share Image reconstruction logic — which inde
 
 The two final temporary transfer JPEGs must:
 
-- show exactly the same visible crop/content as the stored `reference.jpg` and `capture.jpg`;
-- preserve the saved SameView alignment;
+- show exactly the composition shown in the preview: the stored `reference.jpg`/`capture.jpg` frame, center-cropped to the selected print format (§17.1) — or, when no print format is selected (§17.1), the complete frame;
+- preserve the saved SameView alignment (the identical crop is applied to both images, in shared session-frame coordinates);
 - preserve orientation;
-- preserve aspect ratio;
+- preserve the selected aspect ratio (the frame's own aspect ratio when no print format is selected);
 - have identical pixel dimensions to each other;
 - be correctly pixel-oriented without relying on EXIF orientation;
 - be valid JPEG files.
 
 HQ reconstruction must never:
 
-- reveal additional source-image area,
-- introduce a different crop,
+- reveal additional source-image area beyond the frame,
+- introduce any crop other than the §17.1 print crop,
 - recenter the image differently,
 - alter alignment,
 - change the Comparison's intended visible composition.
 
-`reference.jpg` and `capture.jpg` are the visual source of truth for the output composition.
+`reference.jpg` and `capture.jpg` are the unchanged, uncropped source frame for the output composition. The §17.1 print crop is applied only to the Wackelbild preview and to newly created temporary transfer files — never to any stored session file.
+
+### 17.1 Print-Format Selection and Crop
+
+**Target selection.** Once per Wackelbild screen visit, before the order CTA, SameView selects one print target from the session's stable integer viewport (`metadata.json` viewport, falling back to the `capture.jpg` dimensions). `reference.jpg` and `capture.jpg` must both have that viewport's aspect ratio within one pixel of rounding; otherwise no target is selected (see below). The target is never re-selected later from rendered image dimensions.
+
+With `r = shortSide / longSide` of the frame, the target is the family with the smallest relative cover-crop loss `max(r, t) / min(r, t)` (strict `<`; the fixed order below is the formal tie-break):
+
+| Family | Target ratio `t` | `format` slug |
+|---|---|---|
+| 2:3 | 10 / 15 | `10x15` |
+| A-series | 10.5 / 14.9 (A6's own ratio) | `a6` |
+| 3:4 | 15 / 20 | `15x20` |
+| 1:1 | 1 | `15x15` |
+
+Examples: 9:16 and 16:9 → `10x15`; 2:3 → `10x15`; A-series-like → `a6`; 3:4 and 4:3 → `15x20`; 4:5 and 5:4 → `15x20`; square → `15x15`. The table reflects the DeinWackelbild formats currently observed; the partner API does not publish a format list, so it is not an API contract.
+
+**Crop.** The frame is center-cropped to the target's aspect: portrait frame target aspect `t`, landscape `1 / t`. Only the axis with excess content is cropped, equally at both ends (for 9:16 → 2:3 about 7.8% at the top and at the bottom; for 16:9 → 3:2 the same at left and right). There is no stretching and no letterboxing. The cropped axis is made even. The rectangle is computed once from the shared frame dimensions and applied identically to Reference and Capture; there is no per-image crop decision.
+
+**One target everywhere.** The preview (box aspect and centered crop of both images), the transfer renderer (crop before the date badge is drawn, HQ and fallback alike) and the create request (`format` = the target's slug, §32) all use this one selected target.
+
+**No target.** If the session geometry is missing or untrusted, no target is selected: the preview and the transfer use the complete frame, and `format` is omitted.
+
+**Verification.** With a target, each rendered transfer image must match the target's aspect within the crop's integer rounding (2 px). A pair that does not is a local preparation failure — it is never uploaded, and no other format or crop is substituted.
+
+There is no user-facing format, size, or crop/reframe control.
 
 ---
 
@@ -849,7 +880,8 @@ If it is ON:
 
 - Reference transfer JPEG contains the localized Reference date;
 - Capture transfer JPEG contains the localized Capture date;
-- both use the same relative bottom-right layout and style defined by the preview;
+- both use the same relative bottom-right layout and style defined by the preview, except for the slightly larger edge safe margin of §9.6;
+- the badge is positioned relative to the final print output — the cropped image when a print crop applies (§17.1) — anchored to its bottom-right corner just as the preview anchors it inside the preview box (with the §9.6 safe margin);
 - the visible transfer rendering must match the preview as closely as practical across resolution differences.
 
 The date is rendered only into newly created temporary transfer files.
@@ -1029,7 +1061,8 @@ The create request may contain only the data actually required by the agreed han
 
 - partner identifier `sameview`,
 - supported locale,
-- technical Idempotency-Key.
+- technical Idempotency-Key,
+- three optional, non-personal print-configuration fields, each sent as a top-level JSON field only when it has a value: `format`, `orientation`, `direction` (values and derivation are defined in §32).
 
 The Idempotency-Key is a technical operation identifier and must not contain personal data.
 
@@ -1172,9 +1205,9 @@ No extra Cancel button is required because normal Back navigation remains availa
 
 ---
 
-## 32. Orientation Contract
+## 32. Orientation and Print-Format Contract
 
-SameView does not expose a Portrait/Landscape selector for this feature.
+SameView does not expose a Portrait/Landscape or size selector for this feature.
 
 The final transfer images themselves define orientation:
 
@@ -1183,7 +1216,16 @@ The final transfer images themselves define orientation:
 
 Both transfer JPEGs are correctly oriented at pixel level and have identical dimensions.
 
-DeinWackelbild.de may infer its product orientation from the first image as defined by its API/configurator contract.
+SameView supplies the configuration it can derive with certainty as optional create-request fields (§27), never from user input:
+
+- `direction` is always `horizontal` ("Seitlich kippen").
+- `orientation` is derived from the rendered pixel dimensions: `portrait` when width < height and `landscape` when width > height; it is omitted for a square pair.
+- `format` is the slug of the print target selected in §17.1 (`10x15`, `a6`, `15x20` or `15x15`) — the same target the preview showed, never re-derived from the rendered dimensions. Portrait and landscape use the same slug; no separate landscape slug exists. It is omitted only when no target is selected (§17.1).
+- With a target, the rendered pair must be readable, have identical dimensions, and match the target's aspect (§17.1); otherwise the operation fails locally before any network call. Without a target, only `direction` and, when the dimensions are readable and identical, `orientation` are sent.
+
+The request is built once for the rendered pair and reused unchanged across handoff restarts.
+
+This remains a purely technical preselection: SameView still exposes no user-facing size or orientation selector (§55), and the user can change format and orientation on DeinWackelbild.de. The partner API does not validate this configuration against the image geometry, so SameView must never send a configuration that contradicts the transferred images.
 
 ---
 
@@ -1391,7 +1433,7 @@ Requirements include:
 - screen may scroll where required;
 - vertical scrolling must coexist correctly with horizontal preview swipes.
 
-On normal compact-phone layouts, preview height must be bounded so the complete primary interaction stack, including the order CTA, fits within the viewport without routine scrolling for portrait source images. The full preview image remains visible, its aspect ratio is preserved, and no crop is introduced. Existing responsive width constraints continue to apply unchanged. Scrolling remains available as a fallback for large font scale, accessibility needs, genuinely short-height windows, or other layouts that are otherwise physically constrained. On larger/Expanded layouts, the preview must not be artificially shrunk merely to force a compact-looking layout when sufficient vertical space is available.
+On normal compact-phone layouts, preview height must be bounded so the complete primary interaction stack, including the order CTA, fits within the viewport without routine scrolling for portrait source images. The full print-format crop remains visible, its aspect ratio is preserved, and no crop beyond the §17.1 print crop is introduced. Existing responsive width constraints continue to apply unchanged. Scrolling remains available as a fallback for large font scale, accessibility needs, genuinely short-height windows, or other layouts that are otherwise physically constrained. On larger/Expanded layouts, the preview must not be artificially shrunk merely to force a compact-looking layout when sufficient vertical space is available.
 
 The exact compact/medium/expanded behavior must be derived from the authoritative responsive-layout specification and current implementation.
 
@@ -1507,7 +1549,7 @@ A V1 UX implementation is acceptable only if all of the following hold:
 1. Preview uses persisted `reference.jpg` and `capture.jpg` without modifying them.
 2. Print preparation begins only after explicit ordering intent.
 3. Normal print preparation uses the best suitable original sources.
-4. Transfer images reproduce exactly the visible crop/alignment represented by `reference.jpg` and `capture.jpg`.
+4. Transfer images reproduce exactly the composition shown in the preview: the frame represented by `reference.jpg` and `capture.jpg`, center-cropped to the selected print format (§17.1), with the saved alignment preserved.
 5. Both transfer JPEGs have identical pixel dimensions and orientation.
 6. No artificial upscaling is used to make a weaker source match a stronger source.
 7. API size/dimension limits are handled automatically where feasible.
@@ -1702,7 +1744,7 @@ Originalqualität nicht verfügbar
 Abbrechen / Trotzdem fortfahren
     ↓
 Temporary HQ/fallback transfer images are created
-with exact Comparison crop and optional date overlay
+with the exact print-format crop shown in the preview and optional date overlay
     ↓
 All metadata removed
     ↓

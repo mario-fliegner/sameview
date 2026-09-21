@@ -13,12 +13,14 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.SemanticsNodeInteraction
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertIsOff
+import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
@@ -35,6 +37,7 @@ import androidx.test.core.app.ActivityScenario
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.isardomains.sameview.R
+import com.isardomains.sameview.image.wackelbild.WackelbildPrintTarget
 import com.isardomains.sameview.ui.theme.SameViewTheme
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.launch
@@ -99,7 +102,8 @@ class WackelbildScreenTest {
         val retryOpenCallCount: MutableState<Int>,
         val launchedUrls: List<String>,
         val launchResultReports: List<Pair<String, Boolean>>,
-        val emitLaunchEvent: (String) -> Unit
+        val emitLaunchEvent: (String) -> Unit,
+        val printTargetState: MutableState<WackelbildPrintTargetState>
     )
 
     /**
@@ -131,7 +135,8 @@ class WackelbildScreenTest {
         onScreenActive: () -> Unit = {},
         onScreenInactive: () -> Unit = {},
         onScreenLeft: () -> Unit = {},
-        windowWidthSizeClass: WindowWidthSizeClass = WindowWidthSizeClass.Compact
+        windowWidthSizeClass: WindowWidthSizeClass = WindowWidthSizeClass.Compact,
+        printTargetState: WackelbildPrintTargetState = WackelbildPrintTargetState.Resolved(null)
     ): WackelbildTestState {
         // A screen-off/locked device leaves the Activity below RESUMED, which in turn defers
         // Coil's lifecycle-aware image request — see the established pattern in
@@ -165,6 +170,7 @@ class WackelbildScreenTest {
                     val launchResultReports = remember { mutableStateListOf<Pair<String, Boolean>>() }
                     val launchEvent = remember { MutableSharedFlow<String>(extraBufferCapacity = 8) }
                     val scope = rememberCoroutineScope()
+                    val printTargetStateHolder = remember { mutableStateOf(printTargetState) }
 
                     testState = WackelbildTestState(
                         visibleImage = visibleImage,
@@ -178,7 +184,8 @@ class WackelbildScreenTest {
                         retryOpenCallCount = retryOpenCallCount,
                         launchedUrls = launchedUrls,
                         launchResultReports = launchResultReports,
-                        emitLaunchEvent = { url -> scope.launch { launchEvent.emit(url) } }
+                        emitLaunchEvent = { url -> scope.launch { launchEvent.emit(url) } },
+                        printTargetState = printTargetStateHolder
                     )
 
                     WackelbildScreenContent(
@@ -218,6 +225,7 @@ class WackelbildScreenTest {
                             launchedUrls.lastOrNull()?.let { url -> scope.launch { launchEvent.emit(url) } }
                         },
                         onBack = onBack,
+                        printTargetState = printTargetStateHolder.value,
                         windowWidthSizeClass = windowWidthSizeClass,
                         onLaunchCustomTab = { _, url ->
                             launchedUrls.add(url)
@@ -228,7 +236,8 @@ class WackelbildScreenTest {
             }
         }
         composeRule.waitForIdle()
-        waitForPreviewResolved()
+        // A Pending target intentionally composes no preview, so there is nothing to wait for.
+        if (printTargetState !is WackelbildPrintTargetState.Pending) waitForPreviewResolved()
         return testState
     }
 
@@ -266,6 +275,29 @@ class WackelbildScreenTest {
         FileOutputStream(file).use { out ->
             bitmap.compress(Bitmap.CompressFormat.JPEG, 90, out)
         }
+        bitmap.recycle()
+        tempFiles.add(file)
+        return file
+    }
+
+    /** A frame whose outer 5% along the long axis (top/bottom for portrait, left/right for landscape)
+     * is red and whose center is green, so a test can tell whether the outer bands are visible. */
+    private fun createEdgeBandedJpeg(width: Int, height: Int): File {
+        val file = File.createTempFile("wackelbild_img_banded", ".jpg", context.cacheDir)
+        val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+        val canvas = android.graphics.Canvas(bitmap)
+        canvas.drawColor(android.graphics.Color.rgb(40, 170, 80))
+        val paint = android.graphics.Paint().apply { color = android.graphics.Color.rgb(210, 40, 40) }
+        if (height >= width) {
+            val band = height * 0.05f
+            canvas.drawRect(0f, 0f, width.toFloat(), band, paint)
+            canvas.drawRect(0f, height - band, width.toFloat(), height.toFloat(), paint)
+        } else {
+            val band = width * 0.05f
+            canvas.drawRect(0f, 0f, band, height.toFloat(), paint)
+            canvas.drawRect(width - band, 0f, width.toFloat(), height.toFloat(), paint)
+        }
+        FileOutputStream(file).use { out -> bitmap.compress(Bitmap.CompressFormat.JPEG, 92, out) }
         bitmap.recycle()
         tempFiles.add(file)
         return file
@@ -606,6 +638,197 @@ class WackelbildScreenTest {
         val imageH = (imageBounds.bottom - imageBounds.top).value
         assertEquals(containerW, imageW, 1f)
         assertEquals(containerH, imageH, 1f)
+    }
+
+    // --- Print target (print-format-matched preview) ---
+    // With a resolved target the preview box takes the target's aspect and both images are drawn
+    // with a centered Crop, so the preview shows exactly the crop the transfer JPEGs will have.
+    // Without a target (Resolved(null)) nothing changes: full frame, Fit -- covered by every
+    // existing test above/below, which all run with the default Resolved(null).
+
+    private fun target(frameWidth: Int, frameHeight: Int): WackelbildPrintTarget =
+        checkNotNull(WackelbildPrintTarget.select(frameWidth, frameHeight))
+
+    private fun containerAspect(): Float {
+        val bounds = composeRule.onNodeWithTag("wackelbild_reference_preview_container").getUnclippedBoundsInRoot()
+        return (bounds.right - bounds.left).value / (bounds.bottom - bounds.top).value
+    }
+
+    /** Average colour of a thin horizontal strip of [bitmap] centered at [yFraction] of its height
+     * (middle 20% of the width, away from the rounded corners and the border). */
+    private fun stripColor(bitmap: Bitmap, yFraction: Float): Triple<Int, Int, Int> {
+        val y = (bitmap.height * yFraction).toInt().coerceIn(1, bitmap.height - 2)
+        val fromX = (bitmap.width * 0.4f).toInt()
+        val toX = (bitmap.width * 0.6f).toInt()
+        var r = 0; var g = 0; var b = 0; var n = 0
+        for (row in y - 1..y + 1) for (x in fromX until toX) {
+            val pixel = bitmap.getPixel(x, row)
+            r += android.graphics.Color.red(pixel); g += android.graphics.Color.green(pixel); b += android.graphics.Color.blue(pixel); n++
+        }
+        return Triple(r / n, g / n, b / n)
+    }
+
+    private fun Triple<Int, Int, Int>.isRedDominant() = first > second + 40
+    private fun Triple<Int, Int, Int>.isGreenDominant() = second > first + 40
+
+    @Test
+    fun printTarget_9x16Frame_previewContainerHasTwoToThreeAspect() {
+        launch(
+            referenceFile = createJpeg(1080, 1920),
+            captureFile = createJpeg(1080, 1920),
+            printTargetState = WackelbildPrintTargetState.Resolved(target(1080, 1920))
+        )
+        composeRule.waitForIdle()
+
+        assertEquals(2f / 3f, containerAspect(), 0.02f)
+    }
+
+    @Test
+    fun printTarget_16x9Frame_previewContainerHasThreeToTwoAspect() {
+        launch(
+            referenceFile = createJpeg(1920, 1080),
+            captureFile = createJpeg(1920, 1080),
+            printTargetState = WackelbildPrintTargetState.Resolved(target(1920, 1080))
+        )
+        composeRule.waitForIdle()
+
+        assertEquals(3f / 2f, containerAspect(), 0.03f)
+    }
+
+    @Test
+    fun printTarget_3x4Frame_previewContainerHasThreeToFourAspect() {
+        launch(
+            referenceFile = createJpeg(1080, 1440),
+            captureFile = createJpeg(1080, 1440),
+            printTargetState = WackelbildPrintTargetState.Resolved(target(1080, 1440))
+        )
+        composeRule.waitForIdle()
+
+        assertEquals(0.75f, containerAspect(), 0.02f)
+    }
+
+    @Test
+    fun printTarget_previewImagesFillTheTargetBox_bothWithTheSameGeometry() {
+        launch(
+            referenceFile = createJpeg(1080, 1920),
+            captureFile = createJpeg(1080, 1920),
+            printTargetState = WackelbildPrintTargetState.Resolved(target(1080, 1920))
+        )
+        composeRule.waitForIdle()
+
+        val container = composeRule.onNodeWithTag("wackelbild_reference_preview_container").getUnclippedBoundsInRoot()
+        val reference = composeRule.onNodeWithTag("wackelbild_reference_image").getUnclippedBoundsInRoot()
+        val capture = composeRule.onNodeWithTag("wackelbild_capture_image").getUnclippedBoundsInRoot()
+        assertEquals((container.right - container.left).value, (reference.right - reference.left).value, 1f)
+        assertEquals((container.bottom - container.top).value, (reference.bottom - reference.top).value, 1f)
+        assertEquals(reference.left.value, capture.left.value, 0.5f)
+        assertEquals(reference.top.value, capture.top.value, 0.5f)
+        assertEquals((reference.right - reference.left).value, (capture.right - capture.left).value, 0.5f)
+        assertEquals((reference.bottom - reference.top).value, (capture.bottom - capture.top).value, 0.5f)
+    }
+
+    @Test
+    fun printTarget_9x16Frame_previewShowsTheCenteredCrop_edgeBandsAreCropped() {
+        // 5% red bands at the top/bottom of the frame; the 2:3 crop removes ~7.8% at each end, so
+        // a Crop preview shows only the green center at its top and bottom edges.
+        launch(
+            referenceFile = createEdgeBandedJpeg(1080, 1920),
+            captureFile = createEdgeBandedJpeg(1080, 1920),
+            printTargetState = WackelbildPrintTargetState.Resolved(target(1080, 1920))
+        )
+        composeRule.waitForIdle()
+
+        val shot = composeRule.onNodeWithTag("wackelbild_reference_preview_container").captureToImage().asAndroidBitmap()
+        assertTrue("top edge must show the cropped-in green center", stripColor(shot, 0.03f).isGreenDominant())
+        assertTrue("bottom edge must show the cropped-in green center", stripColor(shot, 0.97f).isGreenDominant())
+    }
+
+    @Test
+    fun printTarget_16x9Frame_previewShowsTheCenteredCrop_leftRightEdgeBandsAreCropped() {
+        launch(
+            referenceFile = createEdgeBandedJpeg(1920, 1080),
+            captureFile = createEdgeBandedJpeg(1920, 1080),
+            printTargetState = WackelbildPrintTargetState.Resolved(target(1920, 1080))
+        )
+        composeRule.waitForIdle()
+
+        val shot = composeRule.onNodeWithTag("wackelbild_reference_preview_container").captureToImage().asAndroidBitmap()
+        val centerRow = shot.height / 2
+        val left = shot.getPixel((shot.width * 0.03f).toInt(), centerRow)
+        val right = shot.getPixel((shot.width * 0.97f).toInt(), centerRow)
+        assertTrue("left edge must show the cropped-in green center",
+            android.graphics.Color.green(left) > android.graphics.Color.red(left) + 40)
+        assertTrue("right edge must show the cropped-in green center",
+            android.graphics.Color.green(right) > android.graphics.Color.red(right) + 40)
+    }
+
+    @Test
+    fun printTarget_null_previewKeepsTheFullFrame_edgeBandsStayVisible() {
+        // Control: the same banded frame with no target is shown in full (Fit), so the red bands are
+        // still at the top and bottom edges.
+        launch(
+            referenceFile = createEdgeBandedJpeg(1080, 1920),
+            captureFile = createEdgeBandedJpeg(1080, 1920),
+            printTargetState = WackelbildPrintTargetState.Resolved(null)
+        )
+        composeRule.waitForIdle()
+
+        assertEquals(1080f / 1920f, containerAspect(), 0.02f)
+        val shot = composeRule.onNodeWithTag("wackelbild_reference_preview_container").captureToImage().asAndroidBitmap()
+        assertTrue("top band must be visible", stripColor(shot, 0.03f).isRedDominant())
+        assertTrue("bottom band must be visible", stripColor(shot, 0.97f).isRedDominant())
+    }
+
+    @Test
+    fun printTarget_dateBadge_staysInsideTheTargetBox_atTheUsualMargin() {
+        launch(
+            referenceFile = createJpeg(1080, 1920),
+            captureFile = createJpeg(1080, 1920),
+            isDateOverlayAvailable = true,
+            referenceDateBadgeText = "2008",
+            printTargetState = WackelbildPrintTargetState.Resolved(target(1080, 1920))
+        )
+        composeRule.onNodeWithTag("wackelbild_date_toggle").performClick()
+        composeRule.waitForIdle()
+
+        composeRule.onNodeWithTag("wackelbild_date_badge").assertIsDisplayed()
+        assertBadgeInsideImage("wackelbild_reference_image")
+        assertBadgeEdgeSpacing("wackelbild_reference_image")
+    }
+
+    @Test
+    fun printTarget_pending_showsNoPreview_thenResolvedShowsTheCrop_withoutAFullFrameFlash() {
+        val state = launch(
+            referenceFile = createJpeg(1080, 1920),
+            captureFile = createJpeg(1080, 1920),
+            printTargetState = WackelbildPrintTargetState.Pending
+        )
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("wackelbild_reference_preview_container").assertDoesNotExist()
+        composeRule.onNodeWithTag("wackelbild_reference_image").assertDoesNotExist()
+
+        state.printTargetState.value = WackelbildPrintTargetState.Resolved(target(1080, 1920))
+        waitForPreviewResolved()
+        composeRule.waitForIdle()
+
+        // First (and only) preview ever shown already has the 2:3 crop aspect, never 9:16.
+        assertEquals(2f / 3f, containerAspect(), 0.02f)
+    }
+
+    @Test
+    fun printTarget_lenticularInteractionUnchanged_swipeToggleAndRidgesStillWork() {
+        val state = launch(
+            referenceFile = createJpeg(1080, 1920),
+            captureFile = createJpeg(1080, 1920),
+            printTargetState = WackelbildPrintTargetState.Resolved(target(1080, 1920))
+        )
+        composeRule.onNodeWithTag("wackelbild_ridge_overlay").assertIsDisplayed()
+
+        composeRule.onNodeWithTag("wackelbild_preview_interactive_area").performTouchInput { swipeLeft() }
+        composeRule.waitForIdle()
+
+        assertEquals(WackelbildImageSide.CAPTURE, state.visibleImage.value)
+        assertEquals(1f, state.previewBlendFraction.value, 0f)
     }
 
     // --- Date toggle (Block 4) ---

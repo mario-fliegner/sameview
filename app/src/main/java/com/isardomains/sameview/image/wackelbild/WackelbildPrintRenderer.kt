@@ -3,6 +3,8 @@ package com.isardomains.sameview.image.wackelbild
 
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.Canvas
+import android.graphics.Rect
 import com.isardomains.sameview.image.ShareImageRenderer
 import com.isardomains.sameview.image.readExifOrientedDimensions
 import com.isardomains.sameview.image.readOverlayParams
@@ -47,6 +49,11 @@ private const val JPEG_QUALITY_LOW = 85
  * full-size output bitmaps held at once; the date badge is always drawn before JPEG encoding, so
  * `File.length()` always measures the true final visual output; the frozen-pair fallback never
  * crops/stretches/letterboxes an incompatible-ratio pair and instead hard-fails.
+ *
+ * When a [WackelbildPrintTarget] is supplied, both sides -- HQ and fallback alike -- are cropped to
+ * its aspect with the identical centered rectangle right after they are rendered and before the
+ * date badge is drawn (see [renderBadgeEncodeRecycle]). That uniform print-format crop is separate
+ * from the incompatible-ratio rule above; without a target the output is the full session frame.
  */
 class WackelbildPrintRenderer(
     private val shareRenderer: ShareImageRenderer = ShareImageRenderer()
@@ -58,20 +65,23 @@ class WackelbildPrintRenderer(
      * @param outputDir Directory to write `image_one.jpg`/`image_two.jpg` candidates into — the
      *   caller (Block 6+) owns its lifecycle; this renderer only ever writes inside it.
      * @param dateOverlay Pre-formatted date strings, or null to draw no badge on either side.
+     * @param target The already-selected print target, or null for the full session frame. The
+     *   renderer never selects one itself -- it only crops to the one it is given.
      */
     suspend fun renderPrintPair(
         sessionDir: File,
         outputDir: File,
-        dateOverlay: WackelbildDateOverlay?
+        dateOverlay: WackelbildDateOverlay?,
+        target: WackelbildPrintTarget? = null
     ): WackelbildPrintResult {
         val referenceCandidateFile = File(outputDir, "image_one.jpg")
         val captureCandidateFile = File(outputDir, "image_two.jpg")
 
-        val hqPair = tryRenderHq(sessionDir, referenceCandidateFile, captureCandidateFile, dateOverlay)
+        val hqPair = tryRenderHq(sessionDir, referenceCandidateFile, captureCandidateFile, dateOverlay, target)
         if (hqPair != null) {
             return WackelbildPrintResult.Success(hqPair, usedFallback = false)
         }
-        return renderFallback(sessionDir, referenceCandidateFile, captureCandidateFile, dateOverlay)
+        return renderFallback(sessionDir, referenceCandidateFile, captureCandidateFile, dateOverlay, target)
     }
 
     // ── HQ path ──────────────────────────────────────────────────────────────
@@ -80,7 +90,8 @@ class WackelbildPrintRenderer(
         sessionDir: File,
         referenceCandidateFile: File,
         captureCandidateFile: File,
-        dateOverlay: WackelbildDateOverlay?
+        dateOverlay: WackelbildDateOverlay?,
+        target: WackelbildPrintTarget?
     ): WackelbildPrintPair? {
         return try {
             val viewport = shareRenderer.readSessionViewport(sessionDir)
@@ -118,12 +129,12 @@ class WackelbildPrintRenderer(
             val pair = loop.run(
                 initialDims = resolvedDims,
                 renderReference = { dims, quality ->
-                    renderBadgeEncodeRecycle(referenceCandidateFile, quality, dateOverlay?.referenceText) {
+                    renderBadgeEncodeRecycle(referenceCandidateFile, quality, dateOverlay?.referenceText, dims, target) {
                         shareRenderer.renderHqReference(sessionDir, dims.width, dims.height, overlayParams)
                     }
                 },
                 renderCapture = { dims, quality ->
-                    renderBadgeEncodeRecycle(captureCandidateFile, quality, dateOverlay?.captureText) {
+                    renderBadgeEncodeRecycle(captureCandidateFile, quality, dateOverlay?.captureText, dims, target) {
                         shareRenderer.decodeHqCapture(captureOriginalFile, dims.width, dims.height)
                             ?: throw IOException("Cannot decode HQ capture source in ${sessionDir.name}")
                     }
@@ -145,7 +156,8 @@ class WackelbildPrintRenderer(
         sessionDir: File,
         referenceCandidateFile: File,
         captureCandidateFile: File,
-        dateOverlay: WackelbildDateOverlay?
+        dateOverlay: WackelbildDateOverlay?,
+        target: WackelbildPrintTarget?
     ): WackelbildPrintResult {
         return try {
             val referenceFile = File(sessionDir, "reference.jpg")
@@ -165,12 +177,12 @@ class WackelbildPrintRenderer(
             val pair = loop.run(
                 initialDims = fallbackDims,
                 renderReference = { dims, quality ->
-                    renderBadgeEncodeRecycle(referenceCandidateFile, quality, dateOverlay?.referenceText) {
+                    renderBadgeEncodeRecycle(referenceCandidateFile, quality, dateOverlay?.referenceText, dims, target) {
                         scaleToDims(shareRenderer.decodeReferenceFallback(sessionDir), dims)
                     }
                 },
                 renderCapture = { dims, quality ->
-                    renderBadgeEncodeRecycle(captureCandidateFile, quality, dateOverlay?.captureText) {
+                    renderBadgeEncodeRecycle(captureCandidateFile, quality, dateOverlay?.captureText, dims, target) {
                         val raw = BitmapFactory.decodeFile(captureFile.absolutePath)
                             ?: throw IOException("Cannot decode capture.jpg in ${sessionDir.name}")
                         scaleToDims(raw, dims)
@@ -204,15 +216,38 @@ class WackelbildPrintRenderer(
      * results) — `Canvas` requires a mutable bitmap, so when a badge is actually being drawn onto
      * an immutable source, a mutable copy is made first and the immutable original is recycled
      * immediately. No copy is made on the (far more common) no-badge path.
+     *
+     * When a [target] is given, the bitmap is first cropped to the target's centered rectangle for
+     * [frameDims] -- the same rectangle for both sides of a pair, since both are produced at the
+     * same [frameDims]. This is the single crop point for the HQ and fallback paths, and it runs
+     * before the badge is drawn so the date is positioned against the final cropped output. The
+     * cropped bitmap is freshly allocated and mutable, so it also replaces the immutable-to-mutable
+     * copy above; the full-frame source is recycled as soon as the crop exists.
      */
     private suspend fun renderBadgeEncodeRecycle(
         outFile: File,
         quality: Int,
         dateText: String?,
+        frameDims: WackelbildTargetDimensions,
+        target: WackelbildPrintTarget?,
         produceBitmap: () -> Bitmap
     ): File = withContext(Dispatchers.Default) {
         var bitmap = produceBitmap()
         try {
+            val cropRect = target?.cropRect(frameDims.width, frameDims.height)
+            if (cropRect != null) {
+                // The rectangle is computed for frameDims, so a differently sized bitmap would be
+                // cropped to a different composition -- treat as an internal failure (HQ falls back,
+                // fallback fails) rather than silently producing a mismatched pair.
+                if (bitmap.width != frameDims.width || bitmap.height != frameDims.height) {
+                    throw IOException(
+                        "Rendered bitmap ${bitmap.width}x${bitmap.height} != frame ${frameDims.width}x${frameDims.height}"
+                    )
+                }
+                val cropped = cropBitmap(bitmap, cropRect)
+                bitmap.recycle()
+                bitmap = cropped
+            }
             if (!dateText.isNullOrBlank() && !bitmap.isMutable) {
                 val mutableBitmap = bitmap.copy(Bitmap.Config.ARGB_8888, true)
                 bitmap.recycle()
@@ -224,6 +259,24 @@ class WackelbildPrintRenderer(
             bitmap.recycle()
         }
         outFile
+    }
+
+    /** Copies [rect] of [source] 1:1 (no scaling, no filtering) into a new mutable bitmap. Does not
+     * recycle [source]; the caller does, once this returns. */
+    private fun cropBitmap(source: Bitmap, rect: WackelbildCropRect): Bitmap {
+        val output = Bitmap.createBitmap(rect.width, rect.height, Bitmap.Config.ARGB_8888)
+        try {
+            Canvas(output).drawBitmap(
+                source,
+                Rect(rect.left, rect.top, rect.left + rect.width, rect.top + rect.height),
+                Rect(0, 0, rect.width, rect.height),
+                null
+            )
+        } catch (t: Throwable) {
+            output.recycle()
+            throw t
+        }
+        return output
     }
 
     /** Downscale-only resize to [dims]; never upscales, never crops. Returns [bitmap] unchanged

@@ -276,6 +276,259 @@ class WackelbildPrintRendererInstrumentedTest {
         )
     }
 
+    // ── Print-format crop (WackelbildPrintTarget) ─────────────────────────────
+    // Frames are banded: the outer 5% along the long axis is red, the rest green. The 2:3 crop of a
+    // 9:16 / 16:9 frame removes ~7.8% at each end, so a correctly centered crop shows only green at
+    // the output's long-axis edges, while a missing/mis-anchored crop would show red there.
+
+    private fun printTarget(width: Int, height: Int): WackelbildPrintTarget =
+        checkNotNull(WackelbildPrintTarget.select(width, height))
+
+    private fun isGreen(pixel: Int) = Color.green(pixel) > Color.red(pixel) + 60
+    private fun isRed(pixel: Int) = Color.red(pixel) > Color.green(pixel) + 60
+
+    /** True when the outer long-axis edges of [file]'s output show the green center (bands cropped). */
+    private fun assertLongAxisEdgesAreGreen(file: File, portrait: Boolean) {
+        val bmp = BitmapFactory.decodeFile(file.absolutePath)
+        try {
+            val w = bmp.width
+            val h = bmp.height
+            if (portrait) {
+                assertTrue("top edge must be green (cropped in)", isGreen(bmp.getPixel(w / 2, 2)))
+                assertTrue("bottom edge must be green (cropped in)", isGreen(bmp.getPixel(w / 2, h - 3)))
+            } else {
+                assertTrue("left edge must be green (cropped in)", isGreen(bmp.getPixel(2, h / 2)))
+                assertTrue("right edge must be green (cropped in)", isGreen(bmp.getPixel(w - 3, h / 2)))
+            }
+            assertTrue("center must be green", isGreen(bmp.getPixel(w / 2, h / 2)))
+        } finally {
+            bmp.recycle()
+        }
+    }
+
+    @Test
+    fun target_hqPortrait9x16_outputsAre2x3_identicalDimensions_centeredCropOnBothSides() = runBlocking {
+        createBandedHqSession(sessionDir, 180, 320)
+        val target = printTarget(180, 320)
+        val result = renderer().renderPrintPair(sessionDir, outputDir, null, target) as WackelbildPrintResult.Success
+
+        assertEquals(false, result.usedFallback)
+        val referenceDims = decodeDims(result.pair.referenceFile)
+        assertEquals(referenceDims, decodeDims(result.pair.captureFile))
+        assertTrue("output ${referenceDims} must be portrait", referenceDims.first < referenceDims.second)
+        assertTrue("output ${referenceDims} must match the 2:3 target", target.matchesOutput(referenceDims.first, referenceDims.second))
+        assertLongAxisEdgesAreGreen(result.pair.referenceFile, portrait = true)
+        assertLongAxisEdgesAreGreen(result.pair.captureFile, portrait = true)
+    }
+
+    @Test
+    fun target_hqLandscape16x9_outputsAre3x2_identicalDimensions_centeredCropOnBothSides() = runBlocking {
+        createBandedHqSession(sessionDir, 320, 180)
+        val target = printTarget(320, 180)
+        val result = renderer().renderPrintPair(sessionDir, outputDir, null, target) as WackelbildPrintResult.Success
+
+        assertEquals(false, result.usedFallback)
+        val referenceDims = decodeDims(result.pair.referenceFile)
+        assertEquals(referenceDims, decodeDims(result.pair.captureFile))
+        assertTrue("output ${referenceDims} must be landscape", referenceDims.first > referenceDims.second)
+        assertTrue("output ${referenceDims} must match the 3:2 target", target.matchesOutput(referenceDims.first, referenceDims.second))
+        assertLongAxisEdgesAreGreen(result.pair.referenceFile, portrait = false)
+        assertLongAxisEdgesAreGreen(result.pair.captureFile, portrait = false)
+    }
+
+    @Test
+    fun target_fallbackPortrait9x16_obeysTheTarget_identicalDimensions_centeredCrop() = runBlocking {
+        createBandedFallbackSession(sessionDir, 180, 320)
+        val target = printTarget(180, 320)
+        val result = renderer().renderPrintPair(sessionDir, outputDir, null, target) as WackelbildPrintResult.Success
+
+        assertTrue("no HQ originals -> fallback", result.usedFallback)
+        val referenceDims = decodeDims(result.pair.referenceFile)
+        assertEquals(referenceDims, decodeDims(result.pair.captureFile))
+        assertTrue("output ${referenceDims} must match the 2:3 target", target.matchesOutput(referenceDims.first, referenceDims.second))
+        assertLongAxisEdgesAreGreen(result.pair.referenceFile, portrait = true)
+        assertLongAxisEdgesAreGreen(result.pair.captureFile, portrait = true)
+    }
+
+    @Test
+    fun target_fallbackLandscape16x9_obeysTheTarget_identicalDimensions_centeredCrop() = runBlocking {
+        createBandedFallbackSession(sessionDir, 320, 180)
+        val target = printTarget(320, 180)
+        val result = renderer().renderPrintPair(sessionDir, outputDir, null, target) as WackelbildPrintResult.Success
+
+        assertTrue(result.usedFallback)
+        val referenceDims = decodeDims(result.pair.referenceFile)
+        assertEquals(referenceDims, decodeDims(result.pair.captureFile))
+        assertTrue(target.matchesOutput(referenceDims.first, referenceDims.second))
+        assertLongAxisEdgesAreGreen(result.pair.referenceFile, portrait = false)
+        assertLongAxisEdgesAreGreen(result.pair.captureFile, portrait = false)
+    }
+
+    @Test
+    fun target_frameAlreadyMatching_2x3_noCropApplied_outputKeepsTheFullFrame() = runBlocking {
+        createBandedHqSession(sessionDir, 200, 300) // exactly 2:3
+        val target = printTarget(200, 300)
+        val result = renderer().renderPrintPair(sessionDir, outputDir, null, target) as WackelbildPrintResult.Success
+
+        val dims = decodeDims(result.pair.referenceFile)
+        assertTrue(target.matchesOutput(dims.first, dims.second))
+        // Nothing was cropped, so the red long-axis bands are still at the edges.
+        val bmp = BitmapFactory.decodeFile(result.pair.referenceFile.absolutePath)
+        assertTrue("top band must still be present", isRed(bmp.getPixel(bmp.width / 2, 2)))
+        assertTrue("bottom band must still be present", isRed(bmp.getPixel(bmp.width / 2, bmp.height - 3)))
+        bmp.recycle()
+    }
+
+    @Test
+    fun target_null_hqOutputKeepsTheFullSessionFrame_noCrop() = runBlocking {
+        createBandedHqSession(sessionDir, 180, 320)
+        val result = renderer().renderPrintPair(sessionDir, outputDir, null) as WackelbildPrintResult.Success
+
+        val (w, h) = decodeDims(result.pair.referenceFile)
+        assertEquals("full 9:16 frame kept", 180.0 / 320.0, w.toDouble() / h, 0.01)
+        val bmp = BitmapFactory.decodeFile(result.pair.referenceFile.absolutePath)
+        assertTrue("top band must be present (no crop)", isRed(bmp.getPixel(bmp.width / 2, 2)))
+        assertTrue("bottom band must be present (no crop)", isRed(bmp.getPixel(bmp.width / 2, bmp.height - 3)))
+        bmp.recycle()
+    }
+
+    // ── Date badge is drawn after the crop, so it sits inside the final output ──
+
+    /** Counts the badge's dark navy (SameViewAppSurface) pixels in the bottom-right of [file]. */
+    private fun badgePixelCount(file: File): Int {
+        val bmp = BitmapFactory.decodeFile(file.absolutePath)
+        try {
+            var count = 0
+            for (y in (bmp.height * 0.85f).toInt() until bmp.height) {
+                for (x in (bmp.width * 0.5f).toInt() until bmp.width) {
+                    val p = bmp.getPixel(x, y)
+                    if (Color.red(p) < 70 && Color.green(p) < 80 && Color.blue(p) < 100) count++
+                }
+            }
+            return count
+        } finally {
+            bmp.recycle()
+        }
+    }
+
+    @Test
+    fun target_dateBadge_isInsideTheCroppedOutput_onBothSides() = runBlocking {
+        createBandedHqSession(sessionDir, 180, 320)
+        val target = printTarget(180, 320)
+        val withDir = File(outputDir, "with").apply { mkdirs() }
+        val withoutDir = File(outputDir, "without").apply { mkdirs() }
+
+        val without = renderer().renderPrintPair(sessionDir, withoutDir, null, target) as WackelbildPrintResult.Success
+        val with = renderer().renderPrintPair(
+            sessionDir, withDir, WackelbildDateOverlay("2008 -> 2026", "2026-08-29"), target
+        ) as WackelbildPrintResult.Success
+
+        assertEquals(0, badgePixelCount(without.pair.referenceFile))
+        assertEquals(0, badgePixelCount(without.pair.captureFile))
+        assertTrue("reference badge must be inside the cropped output", badgePixelCount(with.pair.referenceFile) > 20)
+        assertTrue("capture badge must be inside the cropped output", badgePixelCount(with.pair.captureFile) > 20)
+        // Badge drawn *after* the crop: its bottom-right anchor is the cropped output's corner, and the
+        // output still has the target aspect.
+        val (w, h) = decodeDims(with.pair.referenceFile)
+        assertTrue(target.matchesOutput(w, h))
+    }
+
+    @Test
+    fun target_dateBadge_isInsideTheCroppedOutput_onFallbackToo() = runBlocking {
+        createBandedFallbackSession(sessionDir, 180, 320)
+        val target = printTarget(180, 320)
+        val with = renderer().renderPrintPair(
+            sessionDir, outputDir, WackelbildDateOverlay("2008 -> 2026", "2026-08-29"), target
+        ) as WackelbildPrintResult.Success
+
+        assertTrue(with.usedFallback)
+        assertTrue(badgePixelCount(with.pair.referenceFile) > 20)
+        assertTrue(badgePixelCount(with.pair.captureFile) > 20)
+    }
+
+    // ── Sources are never mutated by a cropped render ─────────────────────────
+
+    @Test
+    fun target_render_neverModifiesPersistedSessionFiles_hqAndFallback() = runBlocking {
+        val filesToCheck = listOf("reference.jpg", "capture.jpg", "reference-original.jpg", "capture-original.jpg", "metadata.json")
+
+        createBandedHqSession(sessionDir, 180, 320)
+        val hqBefore = filesToCheck.associateWith { sha256(File(sessionDir, it)) }
+        renderer().renderPrintPair(sessionDir, outputDir, null, printTarget(180, 320))
+        assertEquals(hqBefore, filesToCheck.associateWith { sha256(File(sessionDir, it)) })
+
+        val fallbackDir = File(context.filesDir, "wb_print_test_fb_${System.currentTimeMillis()}").apply { mkdirs() }
+        try {
+            createBandedFallbackSession(fallbackDir, 180, 320)
+            val fallbackFiles = listOf("reference.jpg", "capture.jpg", "metadata.json")
+            val fbBefore = fallbackFiles.associateWith { sha256(File(fallbackDir, it)) }
+            renderer().renderPrintPair(fallbackDir, File(outputDir, "fb").apply { mkdirs() }, null, printTarget(180, 320))
+            assertEquals(fbBefore, fallbackFiles.associateWith { sha256(File(fallbackDir, it)) })
+        } finally {
+            fallbackDir.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun target_outputsStillHaveNoSensitiveExif() = runBlocking {
+        createBandedHqSession(sessionDir, 180, 320)
+        val result = renderer().renderPrintPair(sessionDir, outputDir, null, printTarget(180, 320)) as WackelbildPrintResult.Success
+        assertNoSensitiveExif(result.pair.referenceFile)
+        assertNoSensitiveExif(result.pair.captureFile)
+    }
+
+    // ── Production target resolver (real metadata / real JPEG dimensions) ─────
+    // `resolveWackelbildPrintTarget` is what the ViewModel runs once, before the CTA: the session
+    // viewport must be confirmed by reference.jpg AND capture.jpg, otherwise there is no target.
+
+    @Test
+    fun resolver_consistentSession_selectsTheTargetFromTheViewport() {
+        createBandedFallbackSession(sessionDir, 180, 320)
+        val target = com.isardomains.sameview.ui.wackelbild.resolveWackelbildPrintTarget(sessionDir)
+        assertEquals(WackelbildPrintTarget.select(180, 320), target)
+        assertEquals("10x15", target?.slug)
+    }
+
+    @Test
+    fun resolver_landscapeSession_selectsTheSameFamily() {
+        createBandedFallbackSession(sessionDir, 320, 180)
+        val target = com.isardomains.sameview.ui.wackelbild.resolveWackelbildPrintTarget(sessionDir)
+        assertEquals(WackelbildPrintTarget.select(320, 180), target)
+        assertEquals("10x15", target?.slug)
+    }
+
+    @Test
+    fun resolver_captureJpgWithADifferentAspect_returnsNoTarget() {
+        // Viewport = reference dims (200x300); capture.jpg is 300x200 -- the preview crop and the
+        // print crop could differ, so no target.
+        createFallbackOnlySession(sessionDir, refDims = 200 to 300, capDims = 300 to 200)
+        assertEquals(null, com.isardomains.sameview.ui.wackelbild.resolveWackelbildPrintTarget(sessionDir))
+    }
+
+    @Test
+    fun resolver_missingReferenceJpg_returnsNoTarget() {
+        createBandedFallbackSession(sessionDir, 180, 320)
+        File(sessionDir, "reference.jpg").delete()
+        assertEquals(null, com.isardomains.sameview.ui.wackelbild.resolveWackelbildPrintTarget(sessionDir))
+    }
+
+    @Test
+    fun resolver_missingViewportMetadata_fallsBackToTheCaptureDimensions() {
+        createBandedFallbackSession(sessionDir, 180, 320)
+        File(sessionDir, "metadata.json").delete()
+        val target = com.isardomains.sameview.ui.wackelbild.resolveWackelbildPrintTarget(sessionDir)
+        assertEquals(WackelbildPrintTarget.select(180, 320), target)
+    }
+
+    @Test
+    fun resolver_neverModifiesSessionFiles() {
+        createBandedFallbackSession(sessionDir, 180, 320)
+        val files = listOf("reference.jpg", "capture.jpg", "metadata.json")
+        val before = files.associateWith { sha256(File(sessionDir, it)) }
+        com.isardomains.sameview.ui.wackelbild.resolveWackelbildPrintTarget(sessionDir)
+        assertEquals(before, files.associateWith { sha256(File(sessionDir, it)) })
+    }
+
     // ── Existing Share Image regression: widened methods stay reachable ──────
 
     @Test
@@ -453,6 +706,55 @@ class WackelbildPrintRendererInstrumentedTest {
         File(dir, "metadata.json").writeText(
             """{"version":6,"session":{"id":"wb-fallback-only-test","createdAtMs":1000},""" +
                 """"viewport":{"width":${refDims.first},"height":${refDims.second},"orientation":"PORTRAIT"},""" +
+                """"files":{"capture":"capture.jpg","reference":"reference.jpg"},""" +
+                """"capture":{"timestampMs":1000}}"""
+        )
+    }
+
+    /** Frame whose outer 5% along the long axis is red and whose center is green. */
+    private fun writeEdgeBandedJpeg(file: File, width: Int, height: Int) {
+        val bmp = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(bmp)
+        canvas.drawColor(Color.rgb(40, 170, 80))
+        val paint = android.graphics.Paint().apply { color = Color.rgb(210, 40, 40) }
+        if (height >= width) {
+            val band = height * 0.05f
+            canvas.drawRect(0f, 0f, width.toFloat(), band, paint)
+            canvas.drawRect(0f, height - band, width.toFloat(), height.toFloat(), paint)
+        } else {
+            val band = width * 0.05f
+            canvas.drawRect(0f, 0f, band, height.toFloat(), paint)
+            canvas.drawRect(width - band, 0f, width.toFloat(), height.toFloat(), paint)
+        }
+        FileOutputStream(file).use { bmp.compress(Bitmap.CompressFormat.JPEG, 92, it) }
+        bmp.recycle()
+    }
+
+    /** Banded HQ session: viewport [viewportW] x [viewportH], originals at 2x, all four files banded. */
+    private fun createBandedHqSession(dir: File, viewportW: Int, viewportH: Int) {
+        writeEdgeBandedJpeg(File(dir, "reference.jpg"), viewportW, viewportH)
+        writeEdgeBandedJpeg(File(dir, "capture.jpg"), viewportW, viewportH)
+        writeEdgeBandedJpeg(File(dir, "reference-original.jpg"), viewportW * 2, viewportH * 2)
+        writeEdgeBandedJpeg(File(dir, "capture-original.jpg"), viewportW * 2, viewportH * 2)
+        val orientation = if (viewportH >= viewportW) "PORTRAIT" else "LANDSCAPE"
+        File(dir, "metadata.json").writeText(
+            """{"version":6,"session":{"id":"wb-banded-hq-test","createdAtMs":1000},""" +
+                """"viewport":{"width":$viewportW,"height":$viewportH,"orientation":"$orientation"},""" +
+                """"overlay":{"scale":1.0,"offsetX":0.0,"offsetY":0.0,"displayMode":"COMPARE_WITH_PREVIEW"},""" +
+                """"files":{"capture":"capture.jpg","reference":"reference.jpg",""" +
+                """"referenceOriginal":"reference-original.jpg","captureOriginal":"capture-original.jpg"},""" +
+                """"capture":{"timestampMs":1000}}"""
+        )
+    }
+
+    /** Banded session with no HQ originals/overlay -> straight to the fallback path. */
+    private fun createBandedFallbackSession(dir: File, viewportW: Int, viewportH: Int) {
+        writeEdgeBandedJpeg(File(dir, "reference.jpg"), viewportW, viewportH)
+        writeEdgeBandedJpeg(File(dir, "capture.jpg"), viewportW, viewportH)
+        val orientation = if (viewportH >= viewportW) "PORTRAIT" else "LANDSCAPE"
+        File(dir, "metadata.json").writeText(
+            """{"version":6,"session":{"id":"wb-banded-fallback-test","createdAtMs":1000},""" +
+                """"viewport":{"width":$viewportW,"height":$viewportH,"orientation":"$orientation"},""" +
                 """"files":{"capture":"capture.jpg","reference":"reference.jpg"},""" +
                 """"capture":{"timestampMs":1000}}"""
         )

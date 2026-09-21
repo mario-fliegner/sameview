@@ -1,9 +1,11 @@
 // path: app/src/main/java/com/isardomains/sameview/ui/wackelbild/WackelbildHandoffOrchestrator.kt
 package com.isardomains.sameview.ui.wackelbild
 
+import com.isardomains.sameview.image.readExifOrientedDimensions
 import com.isardomains.sameview.image.wackelbild.WackelbildDateOverlay
 import com.isardomains.sameview.image.wackelbild.WackelbildPrintPair
 import com.isardomains.sameview.image.wackelbild.WackelbildPrintResult
+import com.isardomains.sameview.image.wackelbild.WackelbildPrintTarget
 import com.isardomains.sameview.net.deinwackelbild.CreateHandoffRequest
 import com.isardomains.sameview.net.deinwackelbild.CreateHandoffResponse
 import com.isardomains.sameview.net.deinwackelbild.DeinWackelbildApiClient
@@ -14,6 +16,7 @@ import com.isardomains.sameview.net.deinwackelbild.DeinWackelbildSlot
 import com.isardomains.sameview.net.deinwackelbild.UploadResponse
 import java.io.File
 import java.util.UUID
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
@@ -36,6 +39,12 @@ private val RESTART_CLASSIFICATIONS = setOf(
     DeinWackelbildErrorClassification.INCOMPLETE_HANDOFF
 )
 
+// Partner create-request configuration values (spec §27/§32). The `format` slug is never chosen
+// here -- it comes from the already-selected WackelbildPrintTarget.
+private const val ORIENTATION_PORTRAIT = "portrait"
+private const val ORIENTATION_LANDSCAPE = "landscape"
+private const val DIRECTION_HORIZONTAL = "horizontal"
+
 /**
  * Composes Block 5 (rendering), Block 6 (temp-file lifecycle), and Block 7 (raw API client) into
  * one finite, deterministic, cancellation-safe DeinWackelbild handoff operation.
@@ -46,9 +55,13 @@ private val RESTART_CLASSIFICATIONS = setOf(
  * capturing them at construction time, so a caller's dependency-injection test seam (see
  * [WackelbildViewModel]'s internal constructor) always resolves to whatever the caller currently
  * holds, not whatever existed when this orchestrator itself was constructed.
+ *
+ * [readImageDimensions] reads a rendered JPEG's pixel dimensions; production uses the existing
+ * `readExifOrientedDimensions` helper, tests inject deterministic values.
  */
 class WackelbildHandoffOrchestrator(
-    private val idempotencyKeyFactory: () -> String = { UUID.randomUUID().toString() }
+    private val idempotencyKeyFactory: () -> String = { UUID.randomUUID().toString() },
+    private val readImageDimensions: (File) -> Pair<Int, Int>? = ::readExifOrientedDimensions
 ) {
 
     /**
@@ -62,15 +75,24 @@ class WackelbildHandoffOrchestrator(
      *   the lower-quality fallback source. Must not return until genuine explicit user consent has
      *   been obtained -- there is no implicit-approval path. If the caller cancels while this is
      *   suspended, the cancellation propagates normally and no network call is ever made.
+     * @param printTarget The print target the preview already showed, or null for the full session
+     *   frame. The exact same object is handed to [renderPrintPair] and drives the request's
+     *   `format`; it is never re-selected from the rendered JPEG dimensions.
      */
     suspend fun execute(
         sessionDir: File,
         tempFileManager: WackelbildTempFileManager,
         apiClient: DeinWackelbildApiClient,
         dateOverlay: WackelbildDateOverlay?,
-        renderPrintPair: suspend (sessionDir: File, outputDir: File, dateOverlay: WackelbildDateOverlay?) -> WackelbildPrintResult,
+        renderPrintPair: suspend (
+            sessionDir: File,
+            outputDir: File,
+            dateOverlay: WackelbildDateOverlay?,
+            printTarget: WackelbildPrintTarget?
+        ) -> WackelbildPrintResult,
         awaitFallbackConfirmation: suspend () -> Unit,
-        onPhaseChange: (WackelbildOperationState) -> Unit
+        onPhaseChange: (WackelbildOperationState) -> Unit,
+        printTarget: WackelbildPrintTarget? = null
     ): WackelbildOperationState {
         val operationDir = tempFileManager.createOperationDir()
 
@@ -99,10 +121,11 @@ class WackelbildHandoffOrchestrator(
         suspend fun runOneGeneration(
             idempotencyKey: String,
             pair: WackelbildPrintPair,
-            usedFallback: Boolean
+            usedFallback: Boolean,
+            createRequest: CreateHandoffRequest
         ): GenerationOutcome {
             onPhaseChange(WackelbildOperationState.CreatingHandoff)
-            val createOutcome = runStageWithRetry { apiClient.createHandoff(CreateHandoffRequest(), idempotencyKey) }
+            val createOutcome = runStageWithRetry { apiClient.createHandoff(createRequest, idempotencyKey) }
             val createResponse = when (createOutcome) {
                 is StageOutcome.Restart -> return GenerationOutcome.RestartNeeded(createOutcome.classification)
                 is StageOutcome.Terminal -> return GenerationOutcome.Done(WackelbildOperationState.Failed(createOutcome.failure))
@@ -145,13 +168,22 @@ class WackelbildHandoffOrchestrator(
 
         try {
             onPhaseChange(WackelbildOperationState.Preparing)
-            val renderResult = renderPrintPair(sessionDir, operationDir, dateOverlay)
+            val renderResult = renderPrintPair(sessionDir, operationDir, dateOverlay, printTarget)
             val (pair, usedFallback) = when (renderResult) {
                 is WackelbildPrintResult.Success -> renderResult.pair to renderResult.usedFallback
                 is WackelbildPrintResult.Failure -> return WackelbildOperationState.Failed(
                     WackelbildOperationFailure(WackelbildOperationFailureCategory.PREPARATION_FAILED)
                 )
             }
+
+            // Built once for the rendered pair and reused by every generation/restart below, since
+            // restarts never re-render -- the pair (and therefore its geometry) never changes. Built
+            // before the fallback dialog so a pair that does not honor the target the user saw fails
+            // locally without first prompting for consent -- and before any network call.
+            val createRequest = buildCreateHandoffRequest(readPairDimensions(pair), printTarget)
+                ?: return WackelbildOperationState.Failed(
+                    WackelbildOperationFailure(WackelbildOperationFailureCategory.PREPARATION_FAILED)
+                )
 
             if (usedFallback) {
                 onPhaseChange(WackelbildOperationState.AwaitingFallbackConfirmation)
@@ -161,7 +193,7 @@ class WackelbildHandoffOrchestrator(
             var generation = 1
             while (true) {
                 val idempotencyKey = idempotencyKeyFactory()
-                when (val outcome = runOneGeneration(idempotencyKey, pair, usedFallback)) {
+                when (val outcome = runOneGeneration(idempotencyKey, pair, usedFallback, createRequest)) {
                     is GenerationOutcome.Done -> {
                         if (outcome.state is WackelbildOperationState.Ready) {
                             // Cleanup happens immediately once both uploads are confirmed accepted,
@@ -189,6 +221,44 @@ class WackelbildHandoffOrchestrator(
             }
         }
     }
+
+    /** The rendered pair's pixel dimensions, or `null` when either file is unreadable or the two
+     * differ -- in which case no geometry-derived configuration is trusted or sent. The read is a
+     * blocking file operation, hence [Dispatchers.IO]. */
+    private suspend fun readPairDimensions(pair: WackelbildPrintPair): Pair<Int, Int>? =
+        withContext(Dispatchers.IO) {
+            val reference = readImageDimensions(pair.referenceFile) ?: return@withContext null
+            val capture = readImageDimensions(pair.captureFile) ?: return@withContext null
+            if (reference == capture) reference else null
+        }
+}
+
+/**
+ * Builds the create-handoff request for a rendered pair of [dimensions] (`null` = unreadable or
+ * mismatched). `direction` is always `horizontal`. `orientation` follows the rendered pixel
+ * dimensions (omitted for a square or unknown geometry). `format` is [target]'s slug -- never
+ * re-derived from the dimensions -- and is omitted when there is no target.
+ *
+ * With a [target], the rendered dimensions must be readable and match the target's aspect
+ * ([WackelbildPrintTarget.matchesOutput]); otherwise this returns `null`, because a pair that does
+ * not honor the crop the user was shown must not be sent.
+ */
+internal fun buildCreateHandoffRequest(
+    dimensions: Pair<Int, Int>?,
+    target: WackelbildPrintTarget?
+): CreateHandoffRequest? {
+    val trusted = dimensions?.takeIf { it.first > 0 && it.second > 0 }
+    if (target != null && (trusted == null || !target.matchesOutput(trusted.first, trusted.second))) return null
+    val (width, height) = trusted ?: return CreateHandoffRequest(direction = DIRECTION_HORIZONTAL)
+    return CreateHandoffRequest(
+        format = target?.slug,
+        orientation = when {
+            width < height -> ORIENTATION_PORTRAIT
+            width > height -> ORIENTATION_LANDSCAPE
+            else -> null
+        },
+        direction = DIRECTION_HORIZONTAL
+    )
 }
 
 private fun isValidCreateResponse(response: CreateHandoffResponse): Boolean =

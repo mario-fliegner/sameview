@@ -7,9 +7,13 @@ import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.isardomains.sameview.BuildConfig
+import com.isardomains.sameview.image.ShareImageRenderer
+import com.isardomains.sameview.image.readExifOrientedDimensions
 import com.isardomains.sameview.image.wackelbild.WackelbildDateOverlay
+import com.isardomains.sameview.image.wackelbild.WackelbildDimensionResolver
 import com.isardomains.sameview.image.wackelbild.WackelbildPrintRenderer
 import com.isardomains.sameview.image.wackelbild.WackelbildPrintResult
+import com.isardomains.sameview.image.wackelbild.WackelbildPrintTarget
 import com.isardomains.sameview.net.deinwackelbild.DeinWackelbildApiClient
 import com.isardomains.sameview.net.deinwackelbild.OkHttpDeinWackelbildApiClient
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -17,6 +21,7 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import java.io.File
 import java.util.Locale
 import javax.inject.Inject
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
@@ -26,6 +31,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -39,6 +45,37 @@ internal enum class CustomTabAwaitState { NOT_LAUNCHED, LAUNCHED_AWAITING_RETURN
 enum class WackelbildImageSide {
     REFERENCE,
     CAPTURE
+}
+
+/**
+ * Whether the session's print target has been resolved yet. The preview shows nothing while
+ * [Pending] -- so it never flashes the full session frame before switching to the print crop --
+ * and [Resolved] carries the one target (or `null` = full frame, no format) used by the preview,
+ * the renderer and the handoff for this ViewModel's whole lifetime.
+ */
+sealed interface WackelbildPrintTargetState {
+    data object Pending : WackelbildPrintTargetState
+    data class Resolved(val target: WackelbildPrintTarget?) : WackelbildPrintTargetState
+}
+
+/**
+ * Selects the session's print target once, from its stable integer viewport, or `null` when the
+ * session geometry cannot be trusted. Read-only: never writes `metadata.json` or any image.
+ *
+ * `reference.jpg` and `capture.jpg` are what the preview crops, so both must have the viewport's
+ * aspect within the same one-pixel rounding the print renderer already accepts; otherwise the
+ * preview crop and the print crop could differ, and no target (full frame, no format) is used.
+ */
+internal fun resolveWackelbildPrintTarget(sessionDir: File): WackelbildPrintTarget? {
+    val (viewportWidth, viewportHeight) = ShareImageRenderer().readSessionViewport(sessionDir)
+    val tolerance = WackelbildDimensionResolver.roundingToleranceFor(viewportWidth, viewportHeight)
+    for (name in listOf("reference.jpg", "capture.jpg")) {
+        val (width, height) = readExifOrientedDimensions(File(sessionDir, name)) ?: return null
+        if (!WackelbildDimensionResolver.isRatioWithinTolerance(width, height, viewportWidth, viewportHeight, tolerance)) {
+            return null
+        }
+    }
+    return WackelbildPrintTarget.select(viewportWidth, viewportHeight)
 }
 
 /**
@@ -138,7 +175,7 @@ class WackelbildViewModel @Inject constructor(
 
     /** Overridable in unit tests to avoid real Android Bitmap/Canvas APIs, which don't run on the
      * JVM. Production default is the real Block-5 renderer, unchanged. */
-    private var renderPrintPair: suspend (File, File, WackelbildDateOverlay?) -> WackelbildPrintResult =
+    private var renderPrintPair: suspend (File, File, WackelbildDateOverlay?, WackelbildPrintTarget?) -> WackelbildPrintResult =
         WackelbildPrintRenderer()::renderPrintPair
 
     /** Stateless; holds no per-ViewModel mutable state, so no test-seam override is needed (see
@@ -178,6 +215,10 @@ class WackelbildViewModel @Inject constructor(
     /** Overridable in unit tests; production default performs the narrow metadata.json read. */
     internal var metadataReader: (File) -> WackelbildDateMetadata = ::readWackelbildDateMetadata
 
+    /** Overridable in unit tests; production default selects the print target from the session's
+     * stable geometry (see [resolveWackelbildPrintTarget]). */
+    internal var printTargetResolver: (File) -> WackelbildPrintTarget? = ::resolveWackelbildPrintTarget
+
     /** Overridable in unit tests to avoid real disk IO. */
     internal var ioDispatcher: CoroutineDispatcher = Dispatchers.IO
 
@@ -197,7 +238,7 @@ class WackelbildViewModel @Inject constructor(
         tiltBlendMapper: TiltBlendMapper? = null,
         tempFileManager: WackelbildTempFileManager? = null,
         apiClient: DeinWackelbildApiClient? = null,
-        renderPrintPair: (suspend (File, File, WackelbildDateOverlay?) -> WackelbildPrintResult)? = null
+        renderPrintPair: (suspend (File, File, WackelbildDateOverlay?, WackelbildPrintTarget?) -> WackelbildPrintResult)? = null
     ) : this(savedStateHandle, context) {
         if (tiltProvider != null) this.tiltProvider = tiltProvider
         if (displayRotationProvider != null) this.displayRotationProvider = displayRotationProvider
@@ -244,6 +285,13 @@ class WackelbildViewModel @Inject constructor(
     private val _captureDateBadgeText = MutableStateFlow<String?>(null)
     val captureDateBadgeText: StateFlow<String?> = _captureDateBadgeText.asStateFlow()
 
+    // --- Print target ---
+    // Resolved exactly once in init below, from the session's stable geometry, and never changed:
+    // the preview, the renderer and the handoff all use this one value.
+
+    private val _printTargetState = MutableStateFlow<WackelbildPrintTargetState>(WackelbildPrintTargetState.Pending)
+    val printTargetState: StateFlow<WackelbildPrintTargetState> = _printTargetState.asStateFlow()
+
     init {
         // One-time orphan sweep of cacheDir/wackelbild/, run once per fresh ViewModel instance
         // (i.e. once per genuine Wackelbild screen entry, not on recomposition/ON_RESUME). No
@@ -264,6 +312,17 @@ class WackelbildViewModel @Inject constructor(
             // Availability depends only on whether the Reference date is usable — a missing
             // Capture date must never disable the toggle.
             _isDateOverlayAvailable.value = _referenceDateBadgeText.value != null
+        }
+        viewModelScope.launch {
+            // Any failure means the geometry cannot be trusted: no target (full frame, no format).
+            val target = try {
+                withContext(ioDispatcher) { printTargetResolver(sessionDir) }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                null
+            }
+            _printTargetState.value = WackelbildPrintTargetState.Resolved(target)
         }
     }
 
@@ -444,6 +503,10 @@ class WackelbildViewModel @Inject constructor(
         if (operationJob?.isActive == true) return
         val dateOverlay = currentDateOverlayInput()
         operationJob = viewModelScope.launch {
+            // The exact target the preview displays: awaits the one-time resolution if the CTA is
+            // tapped before it finishes, so the operation can never use a different (or no) target.
+            val printTarget = (_printTargetState.first { it is WackelbildPrintTargetState.Resolved }
+                as WackelbildPrintTargetState.Resolved).target
             val result = orchestrator.execute(
                 sessionDir = sessionDir,
                 tempFileManager = tempFileManager,
@@ -451,7 +514,8 @@ class WackelbildViewModel @Inject constructor(
                 dateOverlay = dateOverlay,
                 renderPrintPair = renderPrintPair,
                 awaitFallbackConfirmation = ::awaitFallbackConfirmation,
-                onPhaseChange = { _operationState.value = it }
+                onPhaseChange = { _operationState.value = it },
+                printTarget = printTarget
             )
             _operationState.value = result
             if (result is WackelbildOperationState.Ready) {

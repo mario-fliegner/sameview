@@ -19,12 +19,15 @@ import android.graphics.Paint
  */
 internal object DateBadgeRenderer {
 
-    // Fractions of min(canvasW, canvasH), derived from Block 4's 6dp/8dp/4dp/8dp/12sp constants
-    // normalized against a 360dp reference baseline (value_dp / 360).
+    // Fractions of min(canvasW, canvasH), derived from Block 4's 6dp/8dp/4dp/12sp constants
+    // normalized against a 360dp reference baseline (value_dp / 360) -- edge margin excepted.
     internal const val CORNER_RADIUS_FRACTION = 6f / 360f
     internal const val PADDING_HORIZONTAL_FRACTION = 8f / 360f
     internal const val PADDING_VERTICAL_FRACTION = 4f / 360f
-    internal const val EDGE_MARGIN_FRACTION = 8f / 360f
+    // Deliberately 12/360, larger than the live preview's 8dp edge margin (spec §9.6): the transfer
+    // JPEG needs extra safe space so the badge stays clear of the display/print inset and crop
+    // DeinWackelbild.de applies to uploaded images. Same value for right and bottom, portrait and landscape.
+    internal const val EDGE_MARGIN_FRACTION = 12f / 360f
     internal const val TEXT_SIZE_FRACTION = 12f / 360f
 
     private val BACKGROUND_COLOR = 0xFF17202F.toInt() // SameViewAppSurface

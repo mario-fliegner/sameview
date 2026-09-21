@@ -76,6 +76,26 @@ class DateBadgeRendererTest {
     }
 
     @Test
+    fun computeBadgeRect_transferEdgeMargin_isPinnedTo12Over360OfTheShortEdge_onBothAxes() {
+        // Literals on purpose (not derived from EDGE_MARGIN_FRACTION): the transfer badge's margin is
+        // deliberately 12/360 of the short edge -- larger than the preview's 8dp -- and an accidental
+        // change of the value must fail here. 1080 * 12 / 360 = 36 px in both orientations.
+        val portrait = DateBadgeRenderer.computeGeometry(1080, 1620)
+        val portraitRect = DateBadgeRenderer.computeBadgeRect(1080, 1620, textWidth = 300f, textHeight = 60f, geometry = portrait)
+        assertEquals(36f, portrait.edgeMargin, 0.01f)
+        assertEquals(1044f, portraitRect[2], 0.01f)
+        assertEquals(1584f, portraitRect[3], 0.01f)
+        assertEquals("right and bottom margins must be equal (portrait)", 1080f - portraitRect[2], 1620f - portraitRect[3], 0.01f)
+
+        val landscape = DateBadgeRenderer.computeGeometry(1620, 1080)
+        val landscapeRect = DateBadgeRenderer.computeBadgeRect(1620, 1080, textWidth = 300f, textHeight = 60f, geometry = landscape)
+        assertEquals(36f, landscape.edgeMargin, 0.01f)
+        assertEquals(1584f, landscapeRect[2], 0.01f)
+        assertEquals(1044f, landscapeRect[3], 0.01f)
+        assertEquals("right and bottom margins must be equal (landscape)", 1620f - landscapeRect[2], 1080f - landscapeRect[3], 0.01f)
+    }
+
+    @Test
     fun computeBadgeRect_widthIncludesHorizontalPaddingBothSides() {
         val geometry = DateBadgeRenderer.computeGeometry(2000, 2000)
         val rect = DateBadgeRenderer.computeBadgeRect(2000, 2000, textWidth = 300f, textHeight = 60f, geometry = geometry)

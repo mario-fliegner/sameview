@@ -148,6 +148,7 @@ fun WackelbildScreen(
     val captureDateBadgeText by viewModel.captureDateBadgeText.collectAsState()
     val operationState by viewModel.operationState.collectAsState()
     val customTabOpenFailure by viewModel.customTabOpenFailure.collectAsState()
+    val printTargetState by viewModel.printTargetState.collectAsState()
     WackelbildScreenContent(
         referenceFile = viewModel.referenceFile,
         captureFile = viewModel.captureFile,
@@ -173,6 +174,7 @@ fun WackelbildScreen(
         onCustomTabLaunchResult = viewModel::onCustomTabLaunchResult,
         onRetryOpenCheckoutUrl = viewModel::retryOpenCheckoutUrl,
         onBack = onBack,
+        printTargetState = printTargetState,
         windowWidthSizeClass = windowWidthSizeClass
     )
 }
@@ -213,6 +215,7 @@ internal fun WackelbildScreenContent(
     onCustomTabLaunchResult: (String, Boolean) -> Unit,
     onRetryOpenCheckoutUrl: () -> Unit,
     onBack: () -> Unit,
+    printTargetState: WackelbildPrintTargetState = WackelbildPrintTargetState.Resolved(null),
     windowWidthSizeClass: WindowWidthSizeClass = WindowWidthSizeClass.Compact,
     onLaunchCustomTab: (Context, String) -> Boolean = { context, url ->
         WackelbildCustomTabLauncher().launch(context, url)
@@ -379,6 +382,7 @@ internal fun WackelbildScreenContent(
                     referenceDateBadgeText = referenceDateBadgeText,
                     captureDateBadgeText = captureDateBadgeText,
                     availableContentHeight = availableContentHeight,
+                    printTargetState = printTargetState,
                     onSwipeDetected = onSwipeDetected,
                     onAccessibilityToggle = onAccessibilityToggle,
                     // weight(1f, fill = false): the preview receives only whatever height remains
@@ -543,10 +547,17 @@ private fun WackelbildOrderArea(
  * Capture), never by conditionally composing one or the other. Also layers the preview-only
  * lenticular ridge surface (§8.10) and, on the outer container, the preview-only perspective tilt
  * (§8.9) -- both purely visual, never touching `reference.jpg`/`capture.jpg`/any persisted or
- * transfer image. Sized from the Reference image's own intrinsic aspect ratio once successfully
- * decoded — never from session metadata and never from a hardcoded fallback ratio (Reference and
- * Capture share the same aspect ratio by construction of the capture pipeline, so this stays
- * stable across the blend).
+ * transfer image.
+ *
+ * With a resolved print target the preview box takes the target's orientation-aware aspect and both
+ * images are drawn with the same centered [ContentScale.Crop], so the preview shows exactly the
+ * crop the transfer JPEGs will have (the badge, ridges, clip, border and perspective all stay on
+ * that same box). Without a target (`Resolved(null)`) it is sized from the Reference image's own
+ * intrinsic aspect ratio once successfully decoded and drawn with [ContentScale.Fit] -- never from
+ * session metadata and never from a hardcoded fallback ratio (Reference and Capture share the same
+ * aspect ratio by construction of the capture pipeline, so this stays stable across the blend).
+ * While the target is still [WackelbildPrintTargetState.Pending] nothing is composed, so the full
+ * frame never flashes before the crop.
  */
 @Composable
 private fun WackelbildPreview(
@@ -558,10 +569,13 @@ private fun WackelbildPreview(
     referenceDateBadgeText: String?,
     captureDateBadgeText: String?,
     availableContentHeight: Dp,
+    printTargetState: WackelbildPrintTargetState,
     onSwipeDetected: () -> Unit,
     onAccessibilityToggle: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    // No hooks precede this early return, so composition state is identical once it resolves.
+    val printTarget = (printTargetState as? WackelbildPrintTargetState.Resolved ?: return).target
     val context = LocalContext.current
     var referenceLoadState by remember(referenceFile) {
         mutableStateOf<AsyncImagePainter.State>(AsyncImagePainter.State.Empty)
@@ -627,13 +641,17 @@ private fun WackelbildPreview(
         // claimed its natural height, via the `Modifier.weight(1f, fill = false)` applied at this
         // composable's call site.
         val maxPreviewHeight = availableContentHeight * PREVIEW_HEIGHT_FRACTION_OF_CONTENT
-        val heightFromWidth = availableW / referenceRatio
+        // The box aspect: the print target's (a centered crop of the frame, drawn with Crop below),
+        // or -- with no target -- the Reference image's own intrinsic ratio (full frame, Fit).
+        val boxRatio = printTarget?.aspect?.toFloat() ?: referenceRatio
+        val imageContentScale = if (printTarget != null) ContentScale.Crop else ContentScale.Fit
+        val heightFromWidth = availableW / boxRatio
         val effectiveHeight = heightFromWidth.coerceAtMost(maxHeight).coerceAtMost(maxPreviewHeight)
         // Recomputed from the (possibly capped) height, never left at the full availableW —
-        // this is what guarantees the box below always matches the image's own aspect ratio,
+        // this is what guarantees the box below always matches the box aspect ratio,
         // whether or not the height cap engaged, so the badge anchored inside it never lands in
         // unused letterbox space.
-        val effectiveWidth = effectiveHeight * referenceRatio
+        val effectiveWidth = effectiveHeight * boxRatio
 
         // Shared shape for both the outer border and the inner content clip (spec §8.11) --
         // reusing one value avoids double-rounding drift between the two.
@@ -728,7 +746,7 @@ private fun WackelbildPreview(
                 Image(
                     painter = referencePainter,
                     contentDescription = null,
-                    contentScale = ContentScale.Fit,
+                    contentScale = imageContentScale,
                     modifier = Modifier
                         .fillMaxSize()
                         .alpha(1f - previewBlendFraction)
@@ -737,7 +755,7 @@ private fun WackelbildPreview(
                 Image(
                     painter = capturePainter,
                     contentDescription = null,
-                    contentScale = ContentScale.Fit,
+                    contentScale = imageContentScale,
                     modifier = Modifier
                         .fillMaxSize()
                         .alpha(previewBlendFraction)

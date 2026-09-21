@@ -17,8 +17,18 @@ enum class DeinWackelbildSlot(val wireValue: String) {
 }
 
 /** Create-handoff request body. `external_reference` is deliberately never a field here — SameView
- * V1 omits it (spec §27) even though the partner API supports it. */
-data class CreateHandoffRequest(val partner: String = "sameview", val locale: String? = null)
+ * V1 omits it (spec §27) even though the partner API supports it.
+ *
+ * [format], [orientation] and [direction] are optional top-level partner-configuration fields
+ * (spec §27/§32); each is serialized only when non-null. Their values are decided by the caller,
+ * not by this transport DTO. */
+data class CreateHandoffRequest(
+    val partner: String = "sameview",
+    val locale: String? = null,
+    val format: String? = null,
+    val orientation: String? = null,
+    val direction: String? = null
+)
 
 data class CreateHandoffResponse(
     val handoffId: String,
@@ -89,6 +99,9 @@ sealed class DeinWackelbildResult<out T> {
 internal fun CreateHandoffRequest.toJson(): JSONObject = JSONObject().apply {
     put("partner", partner)
     locale?.let { put("locale", it) }
+    format?.let { put("format", it) }
+    orientation?.let { put("orientation", it) }
+    direction?.let { put("direction", it) }
 }
 
 /** `Idempotency-Key` format confirmed by the pilot contract: required, 8-100 characters, only
