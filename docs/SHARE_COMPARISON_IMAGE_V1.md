@@ -26,7 +26,7 @@ other export format.
 - Triggered from `CompareScreen` via a new **Export** icon in the top app bar
 - The Export icon opens a dropdown menu with two items: **Share image** and **Create video**
 - Output: a single JPEG file written to `Pictures/SameView` via MediaStore
-- Fully offline: no network calls; the app makes no uploads
+- Fully offline: this feature makes no network calls and no uploads
 - Two visual styles: **Slider** (50/50) and **Side by side**
 - Optional caption area with user-authored metadata below the comparison
 

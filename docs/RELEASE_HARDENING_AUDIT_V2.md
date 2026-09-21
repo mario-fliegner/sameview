@@ -26,6 +26,7 @@ Vollständige Prüfung von App-Code, 19 Spec-Dokumenten und Website-Texten (EN/D
 7. Quick Wins
 8. Spec vs. Code Abweichungen
 9. Offene Fragen
+10. Nachtrag (2026-09-21): INTERNET-Permission
 
 ---
 
@@ -47,7 +48,7 @@ Die wichtigsten 18 Punkte, priorisiert. Details und Belege in den folgenden Absc
 12. **[NIEDRIG]** Mehrere tote String-Ressourcen, u. a. ein deutscher String, der fälschlich „Keine KI-generierten Bilder" behauptet — unbenutzt heute, aber eine Stolperfalle, falls reaktiviert.
 13. **[NIEDRIG]** Lösch-Bestätigungstext unterscheidet sich zwischen EN und DE inhaltlich, nicht nur sprachlich.
 14. **[NIEDRIG]** Walkthrough nutzt Raster-Bilder (WEBP) entgegen der eigenen Spec-Vorgabe „nur Compose-Mockups, keine Screenshots/PNG" — undokumentierte Abweichung.
-15. **[POSITIV]** Kernarchitektur weiterhin sauber: kein INTERNET-Permission, kein Tracking, GPS-Datenfluss wurde Datei für Datei nachvollzogen und ist spec-konform, Branding-Pipeline ist nachweislich metadatenfrei, keine Restore-/Import-Angriffsfläche vorhanden.
+15. **[POSITIV]** Kernarchitektur weiterhin sauber: kein INTERNET-Permission, kein Tracking, GPS-Datenfluss wurde Datei für Datei nachvollzogen und ist spec-konform, Branding-Pipeline ist nachweislich metadatenfrei, keine Restore-/Import-Angriffsfläche vorhanden. *(Stand 2026-07-08: Die INTERNET-Aussage ist für das aktuelle Verhalten überholt, siehe Abschnitt 10.)*
 16. **[POSITIV]** Deutsche Übersetzung ist für alle elf geprüften Feature-Bereiche vollständig — keine fehlenden Strings gefunden (bis auf zwei korrekt als `translatable="false"` markierte URL/E-Mail-Werte).
 17. **[POSITIV]** Reference-Marker-Drag-Loupe ist eine über weite Strecken exakte Umsetzung ihrer eigenen (komplexen) Spec — keine Lücken gefunden.
 18. **[POSITIV]** M-01 (Kamera als Pflichtfeature) sowie A-04/A-05 (Accessibility im About-Screen) aus dem Voraudit vom 2026-05-29 sind inzwischen nachweislich behoben.
@@ -403,6 +404,18 @@ Fragen, die vor dem Go-Live eine bewusste Entscheidung brauchen — keine davon 
 
 9. ~~**Soll der DE-Lösch-Dialogtext („kann nicht rückgängig gemacht werden") auch ins Englische übernommen werden?**~~
    **Beantwortet (2026-07-09):** Beide Sprachen wurden stattdessen auf eine gemeinsame, kombinierte Aussage angeglichen (Löschhinweis + Unwiderruflichkeit), analog zum bereits bewährten `compare_library`-Muster — siehe Abschnitt 06.
+
+---
+
+## 10 — Nachtrag (2026-09-21): INTERNET-Permission
+
+*Dokumentations-Nachtrag zum Audit-Stand 2026-07-08. Kein neuer Audit-Durchgang; die ursprünglichen Befunde oben bleiben unverändert.*
+
+- **INTERNET-Permission:** Seit DeinWackelbild Block 10 (2026-09-03) deklariert die App `android.permission.INTERNET`, ausschließlich für den genehmigten DeinWackelbild-V1-Flow. Die Aussage „kein INTERNET-Permission“ (Executive Summary, Punkt 15) galt für den Stand 2026-07-08 und ist für das aktuelle Verhalten überholt.
+- **Aktuelle Netzwerknutzung:** ausschließlich der ausdrücklich vom Nutzer gestartete Bestell-Transfer (zwei aufbereitete, metadatenfreie Bilder an DeinWackelbild.de, anschließend Öffnen des Checkouts); seit Block 11 (2026-09-04) für Nutzer erreichbar. Keine Hintergrund- oder automatische Übertragung.
+- **Tracking/Analytics:** Durch dieses Feature wurden keine Analyse-, Telemetrie- oder Tracking-Funktionen eingeführt.
+- **V1-Befund P-05 (Standort „never shared or uploaded“):** Die Aussage bleibt zutreffend, ihr V1-Beleg („fehlendes INTERNET-Permission“) trägt jedoch nicht mehr. Sie beruht nun auf der aktuellen Spezifikation und Implementierung des Transfers (keine Standortdaten in der Anfrage, metadatenfreie JPEGs).
+- **Offen (extern, durch diesen Android-Dokumentations-Nachtrag nicht erledigt):** Privacy Policy und Play-Data-Safety-Formular (siehe Abschnitt 04, PS-02) müssen für diese neue Netzwerk-Kategorie erneut geprüft werden.
 
 ---
 

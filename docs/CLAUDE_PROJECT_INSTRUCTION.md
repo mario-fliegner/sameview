@@ -220,9 +220,9 @@ These rules govern normal/local SameView functionality: creating a Comparison, c
 - No hidden data collection
 - Fully offline by default
 
-The sole approved exception is the Hosted Comparison feature — a narrow, explicit, user-initiated online capability. It does not weaken these rules for normal SameView use; see "Addendum (2026-08-19 – Hosted Comparison Network Capability)" below.
+The approved exceptions are the Hosted Comparison feature and the DeinWackelbild V1 order flow — each a narrow, explicit, user-initiated online capability. They do not weaken these rules for normal SameView use; see "Addendum (2026-08-19 – Hosted Comparison Network Capability)" and "Addendum (2026-08-28 – DeinWackelbild Network Exception)" below.
 
-Any future data transfer or telemetry beyond the approved Hosted Comparison exception is out of scope unless explicitly requested.
+Any future data transfer or telemetry beyond the approved Hosted Comparison and DeinWackelbild V1 exceptions is out of scope unless explicitly requested.
 
 ---
 
@@ -707,6 +707,8 @@ The following remain out of scope regardless of this addendum and must not be im
 - Background export without foreground user interaction
 - Any feature requiring the INTERNET permission (except the explicitly approved Hosted Comparison feature — see below)
 
+Note (2026-09-21): the exceptions carved out in the list above concern the Share Image / Video Export / backup-export features. The separately approved DeinWackelbild V1 online capability (see the "DeinWackelbild Network Exception" addendum of 2026-08-28 below) is a distinct feature, not part of those features, and does not invalidate their no-network, no-upload and no-INTERNET-dependency guarantees.
+
 #### CompareScreen TopAppBar — Current Authoritative Structure
 
 The 2026-06-01 addendum documented a "planned future top app bar structure" with a dedicated Create Video icon. That structure was implemented as part of the Create Video scope and has since been superseded by the Export icon introduced with the Share Comparison Image feature.
@@ -824,7 +826,7 @@ The canonical rule is:
 - Hosted Comparison is such an approved feature
 - adding the permission must occur only in the actual approved Hosted implementation phase
 
-`AndroidManifest.xml` is not modified by this addendum. The INTERNET permission is not yet declared and is not yet used.
+`AndroidManifest.xml` is not modified by this addendum. The INTERNET permission is not yet declared and is not yet used. *(Status note, added 2026-09-21: this was true as of the 2026-08-19 addendum. The permission was later declared for DeinWackelbild V1 only, see the 2026-08-28 addendum below; Hosted Comparison itself has no implementation yet.)*
 
 ### Addendum (2026-08-28 – DeinWackelbild Network Exception)
 
@@ -900,4 +902,4 @@ The canonical INTERNET-permission rule now reads:
 - Hosted Comparison and DeinWackelbild V1 are such approved features
 - adding the permission for DeinWackelbild must occur only in the actual approved DeinWackelbild implementation phase
 
-`AndroidManifest.xml` is not modified by this addendum. The INTERNET permission is not yet declared and is not yet used.
+`AndroidManifest.xml` is not modified by this addendum. The INTERNET permission is not yet declared and is not yet used. *(Status note, added 2026-09-21: this was true as of the 2026-08-28 addendum. The `INTERNET` permission was later declared in Block 10 (2026-09-03) for the DeinWackelbild V1 flow only, and that flow has been user-reachable since Block 11 (2026-09-04); it is used solely by the explicit order action described above.)*

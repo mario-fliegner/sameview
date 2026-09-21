@@ -1305,7 +1305,7 @@ Dedicated release-readiness checklist, not buried in implementation notes:
 - **Google Play Data Safety review/update** — required; the existing `RELEASE_HARDENING_AUDIT_V2.md §04` already documents this form as open independent of this feature (Gate 1 finding) — this feature adds a new data category (uploaded images) that must be reflected there before release.
 - **`RELEASE_HARDENING_AUDIT_V2.md` (or a successor audit) update** — required; specifically the "kein INTERNET-Permission" positive claim (Executive Summary point 15) needs correction once `INTERNET` is added in Block 10.
 - **`IMPLEMENTATION_NOTES.md`** — "The app has no INTERNET permission" line needs correction (§28).
-- **Re-check of "offline/no INTERNET/no uploads" wording** — `docs/CLAUDE_PROJECT_INSTRUCTION.md`'s PRIVACY/PLAY COMPLIANCE section already anticipates and permits this exception (Gate 2); no further edit to that document is expected unless implementation reveals a real deviation from the approved behavior.
+- **Re-check of "offline/no INTERNET/no uploads" wording** — `docs/CLAUDE_PROJECT_INSTRUCTION.md`'s PRIVACY/PLAY COMPLIANCE section (Gate 2) named only Hosted Comparison as an approved exception, so the earlier expectation that no edit would be needed did not hold: a minimal documentation consistency pass became necessary and was performed on 2026-09-21 (exception wording and INTERNET-status notes in the affected Source-of-Truth documents).
 - **Partner/commission disclosure review** — required, explicitly left as a compliance-review item by the spec itself (§28) and not resolved here.
 - **Manifest review** — the single `INTERNET` addition, scoped exactly as planned in §21, with no other permission/manifest change.
 - **Release artifact inspection** — the enforceable partner-key exposure checks from §15/§24.3 (VCS/tracked-source absence, no manifest/URL/log placement — explicitly **not** a claim that the compiled key is undiscoverable, which it is not), HTTPS-only behavior confirmation (base URL is `https://...` per spec §50; no HTTP fallback is planned anywhere in `DeinWackelbildApiClient`), no cleartext traffic (no `usesCleartextTraffic="true"`/network security config permitting cleartext is planned — the app's current absence of any network security config is fine since the OS default already disallows cleartext on API 28+, which is below this app's `minSdk 29`).
@@ -1322,7 +1322,7 @@ No legal conclusion is asserted anywhere in this plan; every item above is marke
 | `docs/COMPARE_FLOW_V1.md` | §43 Export-dropdown structure updated to list the third item + divider | Block 1 |
 | `docs/RELEASE_HARDENING_AUDIT_V2.md` | New addendum/finding entry documenting the INTERNET-permission change and its justification, consistent with this document's existing addendum style | Block 14 |
 | `docs/deinwackelbild/DEINWACKELBILD_INTEGRATION_V1.md` | **No change planned.** Only touched if implementation discovers a real, unavoidable contract conflict (none found during planning) | N/A unless triggered |
-| `docs/CLAUDE_PROJECT_INSTRUCTION.md` | **No further change planned** beyond Gate 2's addendum, unless implementation reveals actual behavior diverging from what that addendum already approved | N/A unless triggered |
+| `docs/CLAUDE_PROJECT_INSTRUCTION.md` | Minimal consistency edit made 2026-09-21 (exception wording and INTERNET-status notes); nothing else changed. | Triggered 2026-09-21 |
 
 No historical document is rewritten.
 

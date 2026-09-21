@@ -28,7 +28,7 @@ Permissions:
 - CAMERA
 - ACCESS_FINE_LOCATION (GPS Recreation System; foreground-only; lazy request in Settings)
 - ACCESS_MEDIA_LOCATION (companion permission; allows Photo Picker to return unredacted GPS EXIF)
-- INTERNET (added for the approved Hosted Comparison / DeinWackelbild V1 network exceptions only, per `CLAUDE_PROJECT_INSTRUCTION.md`; no DeinWackelbild network call is currently user-triggerable — Block 11 UI wiring is not yet implemented; no background networking, analytics, or tracking was added)
+- INTERNET (declared in Block 10 for the approved DeinWackelbild V1 network exception only, per `CLAUDE_PROJECT_INSTRUCTION.md`; used solely by the explicit, user-initiated order flow, which has been user-reachable since Block 11; Hosted Comparison is approved but not implemented; no background networking, analytics, or tracking)
 - No READ_MEDIA_IMAGES / READ_EXTERNAL_STORAGE permission
 
 Current release state:
@@ -381,9 +381,9 @@ The saved MediaStore capture is never composited with the overlay.
 
 ## Storage / Privacy / Release Hardening
 
-- Manifest declares CAMERA only
-- INTERNET is declared solely for the approved DeinWackelbild/Hosted Comparison network exceptions (per `CLAUDE_PROJECT_INSTRUCTION.md`); no DeinWackelbild network call is currently user-triggerable, since Block 11 UI wiring is not yet implemented
-- No analytics, telemetry, tracking, upload, or network feature is implemented
+- Manifest declares CAMERA, ACCESS_FINE_LOCATION, ACCESS_COARSE_LOCATION, ACCESS_MEDIA_LOCATION and INTERNET (see Permissions above)
+- INTERNET is declared solely for the approved DeinWackelbild V1 network exception (per `CLAUDE_PROJECT_INSTRUCTION.md`); the only network use is the explicit, user-initiated order flow
+- No analytics, telemetry, tracking, or background/automatic upload is implemented; the only upload is the explicit, user-initiated DeinWackelbild transfer of two prepared, metadata-free images
 - Android Photo Picker is used for reference image selection
 - Captures are saved through MediaStore under `Pictures/SameView`
 - Internal compare sessions are stored under `filesDir/sessions/`

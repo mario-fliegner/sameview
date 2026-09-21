@@ -173,6 +173,12 @@ Current V2 statements:
 - No cloud sync
 - Photos stay on your device
 
+Correction note (2026-09-21):
+- "Photos stay on your device" and "stays local/offline" (see section 18) must not be implemented verbatim as app-wide claims: the optional, explicit DeinWackelbild order flow transfers two prepared images to DeinWackelbild.de after the user starts it.
+- Future trust wording must be feature-scoped and factually accurate; it must not claim that photos never leave the device.
+- "No tracking" and "No cloud sync" remain valid.
+- The shipped About screen does not currently render these statements.
+
 Presentation:
 - short text statements
 - visually quiet
@@ -398,7 +404,7 @@ The About screen should feel like:
 
 The user should quickly understand:
 - what the app is
-- that it stays local/offline
+- that its normal use is local/offline
 - which version is installed
 - how to contact support (if available)
 

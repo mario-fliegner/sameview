@@ -23,7 +23,7 @@ This specification covers the creation and export of a video file from an existi
 - A user-initiated export of a compare session as an MP4 video file
 - Triggered from `CompareScreen` via a dedicated `Create Video` action in the top app bar
 - Output: a standard MP4 file without an audio track, written to `Movies/SameView` via MediaStore
-- Fully offline: no network calls; the app makes no uploads
+- Fully offline: this feature makes no network calls and no uploads
 - Three video modes: **Compare Slider**, **Before & After**, and **Flash**
 
 ### What this feature IS NOT
@@ -47,7 +47,7 @@ SameView is a precision recreation camera. Its core value is deterministic, deta
 - The video shows exactly what the session contains — no reinterpretation, no reframe, no hidden crop
 - Quality is not sacrificed for file size. Detail-rich motifs (architecture, landscapes, buildings) deserve high-fidelity output.
 - No social platform dictates the export format inside the app. The Android Share Sheet is the platform selector.
-- Videos are fully offline-native. The app makes no network calls.
+- Videos are fully offline-native. Video export makes no network calls.
 - The post-render experience is unhurried: the user previews the result, then decides whether to share or discard.
 
 ---
@@ -1137,7 +1137,7 @@ This feature requires **no new Manifest permissions**.
 
 ### 23.1 No Network Calls
 
-The app makes no network calls during video export. The `INTERNET` permission is not declared and is not used.
+The app makes no network calls during video export. Video export itself remains fully offline and does not use the `INTERNET` permission; the app declares `INTERNET` solely for the separately approved DeinWackelbild V1 feature (see `CLAUDE_PROJECT_INSTRUCTION.md`).
 
 ### 23.2 No GPS in Video
 

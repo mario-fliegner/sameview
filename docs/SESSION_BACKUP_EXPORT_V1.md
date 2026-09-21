@@ -560,7 +560,7 @@ The session ID in a ZIP (`metadata.json`'s `session.id`) has the format `YYYY-MM
 
 ### 12.1 No Network Calls
 
-The app makes no network calls during backup export. The INTERNET permission is not declared in the manifest and is not used. SAF destination handling and any subsequent cloud uploads are entirely outside the app's process and permission scope.
+The app makes no network calls during backup export. Backup export itself remains offline and does not use the INTERNET permission; the app declares INTERNET solely for the separately approved DeinWackelbild V1 feature (see `CLAUDE_PROJECT_INSTRUCTION.md`). SAF destination handling and any subsequent cloud uploads are entirely outside the app's process and permission scope.
 
 ### 12.2 GPS Data Included Without Warning
 

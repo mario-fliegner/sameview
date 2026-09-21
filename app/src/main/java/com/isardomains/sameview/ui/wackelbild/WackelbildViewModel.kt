@@ -162,10 +162,7 @@ class WackelbildViewModel @Inject constructor(
      *
      * `partnerKey` is sourced from `BuildConfig.DEINWACKELBILD_PARTNER_KEY` (Block 9's
      * build-type-gated provisioning -- see `app/build.gradle.kts` and
-     * `DEINWACKELBILD_IMPLEMENTATION_PLAN_V1.md` §15). There is still no `INTERNET` permission
-     * (Block 10), so no request built with this client can actually reach the network yet
-     * regardless of the key's value; a blank key is rejected locally by
-     * `OkHttpDeinWackelbildApiClient.createHandoff`.
+     * `DEINWACKELBILD_IMPLEMENTATION_PLAN_V1.md` §15).
      */
     private var apiClient: DeinWackelbildApiClient =
         OkHttpDeinWackelbildApiClient(
