@@ -224,6 +224,18 @@ Anzahl nach Severity: 1 BLOCKER, 3 HIGH, 3 MEDIUM, 4 LOW, 6 INFO.
 
 #### R2-M03 — Store-Text verspricht Backup-Import · MEDIUM · VORB.
 
+*Fix-Status: TEILWEISE ERLEDIGT, noch nicht CLOSED — 2026-10-06, noch nicht committet.* Der Befund unten beschreibt den Auditstand vor der Korrektur und bleibt unverändert stehen.
+
+- **Bestätigt:** Die App ist export-only. `SESSION_BACKUP_EXPORT_V1.md` schließt Import ausdrücklich aus dem Umfang aus, im Code gibt es keinen Import-/Restore-Pfad. Das Produkt bleibt unverändert; ein Import wurde nicht implementiert.
+- **Korrigiert (Store-Vorlagen im Repository `sameview-release`, je genau eine Zeile):**
+  - `01_Store_Texts/FullDescription_EN.txt`: „• Export and import backups of your comparisons“ → „• Export backups of your comparisons“
+  - `01_Store_Texts/FullDescription_DE.txt`: „• Backups deiner Vergleiche exportieren und wieder importieren“ → „• Backups deiner Vergleiche exportieren“
+- **Geprüft, ohne Befund:**
+  - Übrige Dateien in `01_Store_Texts` (Kurzbeschreibungen, Tags, Keywords): Suche nach `import`, `restore`, `importier`, `wiederherstell` ohne weiteren Treffer mit Backup-Bezug.
+  - Alle 12 Store-Screenshots in `03_Screenshots` (6 × EN, 6 × DE, Phone; die Tablet-Ordner sind leer): kein sichtbarer Text zu Backup, Import oder Wiederherstellung.
+  - App-Strings EN/DE, interne Release-Notes, `Technical_DataSafety_Audit.md` und das Website-Repository: kein Import-/Restore-Versprechen für die App.
+- **Offen (manuell, außerhalb der Repositories):** Die Live-Beschreibung in der Google Play Console (EN und DE) muss geprüft und entsprechend korrigiert werden. Die Textdateien sind nur die Vorlage; erst die Änderung im Live-Listing behebt den Befund. Bis dahin bleibt R2-M03 offen.
+
 - **Belege:**
   - `sameview-release/01_Store_Texts/FullDescription_EN.txt`: „• Export and import backups of your comparisons“
   - `FullDescription_DE.txt`: „• Backups deiner Vergleiche exportieren und wieder importieren“
@@ -570,7 +582,7 @@ Mit einem **signierten Release-Build** (R8 aktiv, Produktions-Key per Env-Var) a
 
 5. **R2-M01** — Cancellation im Renderer nicht als Fehler behandeln; Ergebnis abgebrochener Jobs verwerfen. *Status 2026-10-06: behoben und verifiziert (siehe 5.5); der ViewModel-Teil war nicht erforderlich.*
 6. **R2-M02** — Response-Lesen und Datei-IO vom Main-Thread nehmen. *Status 2026-10-06: Netzwerk-Teil behoben und verifiziert (siehe 5.5); die lokale Datei-IO wurde bewusst nicht geändert.*
-7. **R2-M03** — Store-Text „Import“ korrigieren (im Zuge des ohnehin anzupassenden Listings / der R2-Release-Notes, vgl. R2-I03).
+7. **R2-M03** — Store-Text „Import“ korrigieren (im Zuge des ohnehin anzupassenden Listings / der R2-Release-Notes, vgl. R2-I03). *Status 2026-10-06: Store-Vorlagen DE/EN korrigiert (siehe 5.3); das Live-Listing in der Play Console ist noch manuell zu ändern, der Befund ist deshalb noch nicht geschlossen.*
 
 ---
 
