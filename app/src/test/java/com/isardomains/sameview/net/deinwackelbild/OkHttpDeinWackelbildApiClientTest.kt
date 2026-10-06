@@ -5,10 +5,13 @@ import java.io.File
 import java.io.IOException
 import java.net.SocketTimeoutException
 import java.nio.file.Files
+import java.util.concurrent.Executors
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.runTest
-import kotlinx.coroutines.yield
 import okhttp3.Call
 import okhttp3.Callback
 import okhttp3.MediaType.Companion.toMediaType
@@ -24,6 +27,8 @@ import okio.Timeout
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNotSame
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
@@ -40,7 +45,8 @@ class OkHttpDeinWackelbildApiClientTest {
         private val requestRef: Request,
         private val response: Response? = null,
         private val failure: IOException? = null,
-        private val pending: Boolean = false
+        private val pending: Boolean = false,
+        private val onEnqueued: () -> Unit = {}
     ) : Call {
         var cancelled = false
             private set
@@ -52,6 +58,7 @@ class OkHttpDeinWackelbildApiClientTest {
         override fun enqueue(responseCallback: Callback) {
             if (pending) {
                 storedCallback = responseCallback
+                onEnqueued()
                 return
             }
             if (response != null) responseCallback.onResponse(this, response)
@@ -452,7 +459,12 @@ class OkHttpDeinWackelbildApiClientTest {
     @Test
     fun cancellation_propagatesAsCancellationException_andCancelsUnderlyingCall() = runTest {
         lateinit var fakeCall: FakeCall
-        val factory = Call.Factory { req -> FakeCall(req, pending = true).also { fakeCall = it } }
+        // Completed from inside enqueue(): the request has really been started. The client runs the
+        // call on Dispatchers.IO, so yielding on the test thread no longer guarantees that.
+        val enqueued = CompletableDeferred<Unit>()
+        val factory = Call.Factory { req ->
+            FakeCall(req, pending = true, onEnqueued = { enqueued.complete(Unit) }).also { fakeCall = it }
+        }
         val client = OkHttpDeinWackelbildApiClient(factory, partnerKey)
 
         var caughtCancellation = false
@@ -464,12 +476,58 @@ class OkHttpDeinWackelbildApiClientTest {
                 caughtCancellation = true
             }
         }
-        yield() // let the coroutine reach suspendCancellableCoroutine (enqueue() already called)
+        enqueued.await() // the underlying call has reached enqueue() -- only now cancel
         job.cancel()
         job.join()
 
         assertTrue(caughtCancellation)
         assertTrue(fakeCall.cancelled)
+    }
+
+    // ── Response handling thread ─────────────────────────────────────────────
+
+    /** Records which thread actually consumes and closes the response body. */
+    private class ThreadRecordingResponseBody(private val delegate: ResponseBody) : ResponseBody() {
+        @Volatile var sourceThread: Thread? = null
+            private set
+        @Volatile var closeThread: Thread? = null
+            private set
+        override fun contentType() = delegate.contentType()
+        override fun contentLength() = delegate.contentLength()
+        override fun source(): BufferedSource {
+            sourceThread = Thread.currentThread()
+            return delegate.source()
+        }
+        override fun close() {
+            closeThread = Thread.currentThread()
+            delegate.close()
+        }
+    }
+
+    @Test
+    fun responseBody_isConsumedAndClosedOffTheCallingThread() {
+        // A single-thread dispatcher stands in for the Android Main thread the ViewModel calls from.
+        val callerExecutor = Executors.newSingleThreadExecutor { Thread(it, "main-substitute") }
+        val callerDispatcher = callerExecutor.asCoroutineDispatcher()
+        try {
+            val body = ThreadRecordingResponseBody(
+                validCreateResponseJson().toResponseBody("application/json".toMediaType())
+            )
+            val factory = Call.Factory { req -> FakeCall(req, response = fakeResponse(req, 201, "", body = body)) }
+            val client = OkHttpDeinWackelbildApiClient(factory, partnerKey)
+
+            val (callerThread, result) = runBlocking(callerDispatcher) {
+                Thread.currentThread() to client.createHandoff(CreateHandoffRequest(), validIdempotencyKey)
+            }
+
+            assertTrue(result is DeinWackelbildResult.Success)
+            assertNotNull("response body was never read", body.sourceThread)
+            assertNotNull("response body was never closed", body.closeThread)
+            assertNotSame("response body must not be read on the calling thread", callerThread, body.sourceThread)
+            assertNotSame("response must not be closed on the calling thread", callerThread, body.closeThread)
+        } finally {
+            callerDispatcher.close()
+        }
     }
 
     // ── Response body resource safety ────────────────────────────────────────

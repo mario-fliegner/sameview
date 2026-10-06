@@ -291,6 +291,29 @@ Anzahl nach Severity: 1 BLOCKER, 3 HIGH, 3 MEDIUM, 4 LOW, 6 INFO.
 
 #### R2-M02 — Netzwerk-Response und Datei-IO auf dem Main-Thread · MEDIUM · NEU
 
+*Fix-Status: CLOSED für den Netzwerk-Teil — 2026-10-06, noch nicht committet. Einstufung nach Detailanalyse: PARTIALLY CONFIRMED.* Der Befund unten beschreibt den Auditstand vor dem Fix und bleibt unverändert stehen.
+
+- **Präzisierung des Befunds (Analyse am Code und an den OkHttp-4.12.0-Quellen):**
+  - **Bestätigt:** Der Response-Body wurde immer auf dem Main-Thread gelesen, geparst und geschlossen. `startOperation()` läuft auf `Dispatchers.Main.immediate`, `Call.await()` setzte dort fort, und `onResponse` liefert nur die Header; der Body wird erst beim Lesen gestreamt.
+  - **Normalfall unkritisch:** `deinwackelbild.de` handelt per ALPN HTTP/2 aus. Dort macht der lesende Thread keine Socket-IO, sondern wartet auf den Reader-Thread. Für diesen Pfad wurde **kein reproduzierbarer ANR oder Crash festgestellt**; die Wartezeit liegt bei kleinen JSON-Antworten im Millisekundenbereich.
+  - **Störfall A (Verbindung über HTTP/1.1, z. B. Netz ohne ALPN):** Body-Lesen auf Main kann den Socket berühren → `NetworkOnMainThreadException`, von `runCatching` geschluckt → bei 2xx `MALFORMED_RESPONSE` (nicht retrybar). Das anschließende `close()` liest erneut vom Socket (`discard()` fängt nur `IOException`) → unbehandelte Exception, also Absturz.
+  - **Störfall B (HTTP/2, Body bleibt nach den Headern aus):** Main-Thread blockiert bis zum Read-Timeout (60 s); danach schreibt `close()` synchron ein `RST_STREAM` auf Main → ebenfalls unbehandelte Exception.
+  - Beide Störfälle sind aus dem Code abgeleitet und **nicht auf einem Gerät reproduziert**.
+- **Umsetzung:** Der unveränderte Rumpf von `OkHttpDeinWackelbildApiClient.executeAndParse()` läuft jetzt in `withContext(Dispatchers.IO)`. Fortsetzung nach `await()`, Body-Lesen, Parsing und Schließen finden damit außerhalb des Main-Threads statt. OkHttp-Konfiguration, Timeouts, `enqueue()`/`Call.cancel()`, Request-Aufbau, Key-Behandlung, `runCatching` und alle Fehlerklassen sind unverändert; Orchestrator und ViewModel wurden nicht geändert.
+- **Tests** in `OkHttpDeinWackelbildApiClientTest`:
+  - Neu: `responseBody_isConsumedAndClosedOffTheCallingThread` ruft den Client von einem Ein-Thread-Dispatcher (Main-Ersatz) auf und prüft, dass Body-Lesen und Schließen auf einem anderen Thread stattfinden.
+  - Angepasst (nur Synchronisation, Assertions unverändert): `cancellation_propagatesAsCancellationException_andCancelsUnderlyingCall` wartet jetzt auf ein explizites Signal aus `enqueue()` statt auf `yield()`. Mit dem Start des Calls auf einem IO-Thread war die alte Annahme zeitabhängig: In 1 von 5 Läufen schlug der Test mit `UninitializedPropertyAccessException` fehl, weil der Abbruch vor dem Start des Requests ankam. Produktiv ist dieses Verhalten korrekt (kein Request, `CancellationException`).
+- **Verifikation:**
+
+  | Lauf | Ergebnis |
+  |---|---|
+  | Gegenprobe ohne Fix: `testDebugUnitTest --tests '*OkHttpDeinWackelbildApiClientTest'` | 35 Tests, genau der neue Test fehlgeschlagen, 34 bestanden |
+  | Testklasse mit Fix, 20 Wiederholungen (`:app:testDebugUnitTest --rerun --tests '*OkHttpDeinWackelbildApiClientTest'`) | 20 × 35/35 bestanden |
+  | `./gradlew testDebugUnitTest assembleDebug lintDebug --rerun-tasks --continue` | BUILD SUCCESSFUL; 1232 Unit-Tests, 0 Fehler; Lint 0 Errors, 117 Warnings (unverändert) |
+
+- **Nicht Teil des Fixes:** die kurze lokale Datei-IO auf Main (`createOperationDir()`, `deleteOperationDir()`, Vorab-Lesen im Renderer). Sie ist nicht fatal, ein konkreter Fehlerpfad wurde nicht nachgewiesen; dieser Teil des Befunds bleibt unverändert bestehen. Ebenfalls unverändert: R2-I04 (ungeschlossene Response, wenn `onResponse` nach einem Abbruch eintrifft).
+- **Weiterhin offen:** Der Nachweis am Gerät (StrictMode mit `detectNetwork` während einer echten Bestellung, Abschnitt 10, Punkt 7). Kein automatisierter Gerätetest erreicht den echten Client.
+
 - **Dateien/Funktionen:** `WackelbildViewModel.startOperation()` (`viewModelScope.launch` → `Dispatchers.Main.immediate`), `OkHttpDeinWackelbildApiClient.executeAndParse()` (`resp.body?.string()` nach `await()`), `WackelbildHandoffOrchestrator.execute()` (`createOperationDir()`, `deleteOperationDir()`), `WackelbildPrintRenderer.tryRenderHq()`/`renderFallback()` (`readSessionViewport`, `readOverlayParams`, `readExifOrientedDimensions` vor dem ersten `withContext`).
 - **Befund:**
   - `Call.await()` setzt die Coroutine im Aufrufer-Dispatcher fort, also auf **Main**. Dort wird `resp.body?.string()` synchron gelesen.
@@ -546,7 +569,7 @@ Mit einem **signierten Release-Build** (R8 aktiv, Produktions-Key per Env-Var) a
 **Dringend empfohlen vor Release 2** (MEDIUM, geringer Aufwand, reale Nutzerwirkung):
 
 5. **R2-M01** — Cancellation im Renderer nicht als Fehler behandeln; Ergebnis abgebrochener Jobs verwerfen. *Status 2026-10-06: behoben und verifiziert (siehe 5.5); der ViewModel-Teil war nicht erforderlich.*
-6. **R2-M02** — Response-Lesen und Datei-IO vom Main-Thread nehmen.
+6. **R2-M02** — Response-Lesen und Datei-IO vom Main-Thread nehmen. *Status 2026-10-06: Netzwerk-Teil behoben und verifiziert (siehe 5.5); die lokale Datei-IO wurde bewusst nicht geändert.*
 7. **R2-M03** — Store-Text „Import“ korrigieren (im Zuge des ohnehin anzupassenden Listings / der R2-Release-Notes, vgl. R2-I03).
 
 ---

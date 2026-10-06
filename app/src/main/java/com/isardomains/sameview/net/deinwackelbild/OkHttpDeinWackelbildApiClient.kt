@@ -5,7 +5,9 @@ import java.io.File
 import java.io.IOException
 import java.util.concurrent.TimeUnit
 import kotlin.coroutines.resume
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withContext
 import okhttp3.Call
 import okhttp3.Callback
 import okhttp3.MediaType.Companion.toMediaType
@@ -98,7 +100,9 @@ class OkHttpDeinWackelbildApiClient(
         request: Request,
         expectedSuccessCode: Int,
         parse: (JSONObject) -> T?
-    ): DeinWackelbildResult<T> {
+    ): DeinWackelbildResult<T> = withContext(Dispatchers.IO) {
+        // Everything below runs off the caller's (Main) thread: after `await()` resumes, reading the
+        // streamed response body and closing the response can both touch the socket.
         val response = try {
             callFactory.newCall(request).await()
         } catch (e: IOException) {
@@ -106,12 +110,12 @@ class OkHttpDeinWackelbildApiClient(
             // identically -- both map to the same RETRYABLE_NETWORK classification (spec §14.6).
             // A genuine coroutine cancellation is not an IOException and is not caught here; it
             // propagates as CancellationException, never becoming a Failure.
-            return DeinWackelbildResult.Failure(
+            return@withContext DeinWackelbildResult.Failure(
                 DeinWackelbildApiError(DeinWackelbildErrorClassification.RETRYABLE_NETWORK)
             )
         }
 
-        return response.use { resp ->
+        response.use { resp ->
             val bodyString = runCatching { resp.body?.string() }.getOrNull()
             if (resp.isSuccessful && resp.code == expectedSuccessCode) {
                 val parsed = bodyString?.let(::parseJsonObjectOrNull)?.let(parse)
