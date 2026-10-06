@@ -8,6 +8,7 @@ import android.graphics.Rect
 import com.isardomains.sameview.image.ShareImageRenderer
 import com.isardomains.sameview.image.readExifOrientedDimensions
 import com.isardomains.sameview.image.readOverlayParams
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -142,6 +143,9 @@ class WackelbildPrintRenderer(
                 deleteCandidate = { it.delete() }
             )
             pair?.let { (refFile, capFile) -> WackelbildPrintPair(refFile, capFile) }
+        } catch (e: CancellationException) {
+            // A cancelled operation is not an HQ failure: never route it into the fallback.
+            throw e
         } catch (_: Exception) {
             // Any HQ decode/render exception (IO, decode, unexpected) routes to fallback (§13).
             null
@@ -196,6 +200,9 @@ class WackelbildPrintRenderer(
             } else {
                 WackelbildPrintResult.Failure(WackelbildPrintFailureReason.PERMANENT_NO_VALID_SOURCE)
             }
+        } catch (e: CancellationException) {
+            // A cancelled operation is not a render failure: never report it as one.
+            throw e
         } catch (_: Exception) {
             WackelbildPrintResult.Failure(WackelbildPrintFailureReason.PERMANENT_NO_VALID_SOURCE)
         } catch (_: OutOfMemoryError) {

@@ -255,6 +255,23 @@ Anzahl nach Severity: 1 BLOCKER, 3 HIGH, 3 MEDIUM, 4 LOW, 6 INFO.
 
 #### R2-M01 — Abbruch während der Vorbereitung wird als Fehler angezeigt · MEDIUM · NEU
 
+*Fix-Status: CLOSED — 2026-10-06, noch nicht committet.* Der Befund unten beschreibt den Auditstand vor dem Fix und bleibt unverändert stehen.
+
+- **Umsetzung:** `WackelbildPrintRenderer.tryRenderHq()` und `renderFallback()` werfen eine `CancellationException` jetzt vor dem generischen `catch (_: Exception)` weiter. Ein Abbruch löst damit weder den Fallback aus noch wird er als `Failure(PERMANENT_NO_VALID_SOURCE)` zurückgegeben. Echte IO-, Decode- und OOM-Fehler verhalten sich unverändert.
+- **Kein ViewModel-Guard:** Die unten genannte zweite Fix-Richtung (Ergebnis abgebrochener Jobs im ViewModel verwerfen) war nicht erforderlich. Weil der Renderer die Cancellation propagiert, erreicht eine abgebrochene Operation die Ergebniszuweisung in `startOperation()` nicht mehr. Damit entfällt auch die unter Schritt 6 beschriebene Überschreibung einer neu gestarteten Operation.
+- **Neue Tests** in `WackelbildPrintRendererInstrumentedTest`: `cancelledJob_validHqSession_propagatesCancellation_noFallbackNoFailure` (HQ-Catch-Kette) und `cancelledJob_missingCaptureOriginal_propagatesCancellation_noFailure` (Fallback-Catch-Kette). Beide laufen in einem bereits abgebrochenen Job und sind damit deterministisch.
+- **Verifikation:**
+
+  | Lauf | Ergebnis |
+  |---|---|
+  | Gegenprobe ohne Fix: `WackelbildPrintRendererInstrumentedTest` auf `pixel2Api29` | 38 Tests, genau die 2 neuen fehlgeschlagen (`expected null, but was:<Failure(reason=PERMANENT_NO_VALID_SOURCE)>`), 36 bestanden |
+  | `./gradlew testDebugUnitTest assembleDebug lintDebug --continue` | BUILD SUCCESSFUL; 1231 Unit-Tests, 0 Fehler; Lint 0 Errors, 117 Warnings (unverändert) |
+  | `WackelbildPrintRendererInstrumentedTest` auf `pixel2Api36` | 38/38 bestanden |
+  | `WackelbildPrintRendererInstrumentedTest` auf `pixel2Api29` | 38/38 bestanden (zweiter Anlauf, siehe unten) |
+
+- **Hinweis zum ersten API-29-Lauf mit Fix:** Er brach ohne Testausführung ab (0 Tests). Der frisch gestartete Emulator meldete bei der Installation „API level=1“ (`Cannot install split APKs with API level < 21`). Die dabei geschriebene Ergebnisdatei ließ anschließend auch `mergeDebugAndroidTestTestResultProtos` im API-36-Lauf fehlschlagen, obwohl dort alle 38 Tests bestanden hatten. Das ist ein Emulator-/Infrastrukturproblem ohne Bezug zum Fix; die Wiederholung beider Läufe war erfolgreich.
+- **Nicht Teil des Fixes:** R2-L01 (nach dem Abbruch bleibt der Nutzer auf dem Wackelbild-Screen). Der laufende Bitmap-Block ist weiterhin nicht unterbrechbar; der Abbruch wirkt erst, wenn dieser Block beendet ist.
+
 - **Dateien/Funktionen:**
   - `image/wackelbild/WackelbildPrintRenderer.kt`: `tryRenderHq()` (`catch (_: Exception) { null }`) und `renderFallback()` (`catch (_: Exception) { Failure(PERMANENT_NO_VALID_SOURCE) }`)
   - `ui/wackelbild/WackelbildHandoffOrchestrator.execute()`
@@ -528,7 +545,7 @@ Mit einem **signierten Release-Build** (R8 aktiv, Produktions-Key per Env-Var) a
 
 **Dringend empfohlen vor Release 2** (MEDIUM, geringer Aufwand, reale Nutzerwirkung):
 
-5. **R2-M01** — Cancellation im Renderer nicht als Fehler behandeln; Ergebnis abgebrochener Jobs verwerfen.
+5. **R2-M01** — Cancellation im Renderer nicht als Fehler behandeln; Ergebnis abgebrochener Jobs verwerfen. *Status 2026-10-06: behoben und verifiziert (siehe 5.5); der ViewModel-Teil war nicht erforderlich.*
 6. **R2-M02** — Response-Lesen und Datei-IO vom Main-Thread nehmen.
 7. **R2-M03** — Store-Text „Import“ korrigieren (im Zuge des ohnehin anzupassenden Listings / der R2-Release-Notes, vgl. R2-I03).
 

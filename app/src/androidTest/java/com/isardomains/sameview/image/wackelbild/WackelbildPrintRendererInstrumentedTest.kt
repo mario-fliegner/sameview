@@ -13,11 +13,16 @@ import com.isardomains.sameview.image.ShareComparisonStyle
 import com.isardomains.sameview.image.ShareImageRenderer
 import com.isardomains.sameview.image.ShareQuality
 import com.isardomains.sameview.image.ShareRenderConfig
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -475,6 +480,45 @@ class WackelbildPrintRendererInstrumentedTest {
         val result = renderer().renderPrintPair(sessionDir, outputDir, null, printTarget(180, 320)) as WackelbildPrintResult.Success
         assertNoSensitiveExif(result.pair.referenceFile)
         assertNoSensitiveExif(result.pair.captureFile)
+    }
+
+    // ── Cancellation (a cancelled operation is never a render failure) ───────
+    // Each test runs the renderer inside an already-cancelled job, so the first suspension point
+    // (`renderBadgeEncodeRecycle`'s `withContext`) throws deterministically -- no timing involved.
+
+    /** Runs [WackelbildPrintRenderer.renderPrintPair] inside an already-cancelled job and asserts
+     * the cancellation propagates instead of being converted into a result. */
+    private fun assertRenderPropagatesCancellation() {
+        var result: WackelbildPrintResult? = null
+        var cancellation: CancellationException? = null
+        runBlocking {
+            launch(start = CoroutineStart.UNDISPATCHED) {
+                coroutineContext.cancel()
+                try {
+                    result = renderer().renderPrintPair(sessionDir, outputDir, null)
+                } catch (e: CancellationException) {
+                    cancellation = e
+                    throw e
+                }
+            }.join()
+        }
+        assertNull("cancellation must not be converted into a render result", result)
+        assertNotNull("renderPrintPair must propagate CancellationException", cancellation)
+    }
+
+    @Test
+    fun cancelledJob_validHqSession_propagatesCancellation_noFallbackNoFailure() {
+        // HQ sources are valid, so the cancellation surfaces inside the HQ path's catch chain.
+        createHqSession(sessionDir)
+        assertRenderPropagatesCancellation()
+    }
+
+    @Test
+    fun cancelledJob_missingCaptureOriginal_propagatesCancellation_noFailure() {
+        // HQ is skipped before any suspension point, so the cancellation surfaces inside the
+        // fallback path's catch chain.
+        createBrokenHqSessionMissingCaptureOriginal(sessionDir)
+        assertRenderPropagatesCancellation()
     }
 
     // ── Production target resolver (real metadata / real JPEG dimensions) ─────
