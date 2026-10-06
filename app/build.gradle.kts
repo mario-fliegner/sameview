@@ -119,6 +119,42 @@ android {
     }
 }
 
+// DeinWackelbild release gate.
+//
+// A release APK/AAB must never be produced with a blank partner key: the feature would stay
+// visible while every order fails. The check runs once the task graph is known and before any task
+// executes, so no artifact is written. It applies only when a release artifact task is part of the
+// requested build -- debug builds, unit/instrumentation tests, lint and IDE sync are unaffected.
+// Only blank/non-blank is checked, and the key value is never printed.
+val deinWackelbildReleaseArtifactTaskNames = mutableSetOf<String>()
+androidComponents {
+    onVariants(selector().withBuildType("release")) { variant ->
+        val variantName = variant.name.replaceFirstChar { it.uppercase() }
+        deinWackelbildReleaseArtifactTaskNames += listOf(
+            "assemble$variantName",
+            "bundle$variantName",
+            "package$variantName",
+            "package${variantName}Bundle",
+            "package${variantName}UniversalApk",
+            "sign${variantName}Bundle",
+            "install$variantName"
+        )
+    }
+}
+val deinWackelbildReleaseKeyIsBlank: Boolean = deinWackelbildPartnerKeyEnv.isNullOrBlank()
+gradle.taskGraph.whenReady {
+    val buildsReleaseArtifact = allTasks.any {
+        it.project == project && it.name in deinWackelbildReleaseArtifactTaskNames
+    }
+    if (buildsReleaseArtifact && deinWackelbildReleaseKeyIsBlank) {
+        throw GradleException(
+            "DEINWACKELBILD_PARTNER_KEY is missing or blank. Release artifacts require a non-blank " +
+                "partner key supplied through the DEINWACKELBILD_PARTNER_KEY environment variable " +
+                "(local.properties is never used for release builds)."
+        )
+    }
+}
+
 dependencies {
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
