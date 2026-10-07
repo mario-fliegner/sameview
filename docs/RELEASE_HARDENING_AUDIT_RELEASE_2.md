@@ -211,6 +211,30 @@ Anzahl nach Severity: 1 BLOCKER, 3 HIGH, 3 MEDIUM, 4 LOW, 6 INFO.
 
 #### R2-H02 — Data Safety / Play Console noch nicht für R2 aktualisiert · HIGH · NEU (extern)
 
+*Fix-Status: TEILWEISE ERLEDIGT, noch nicht CLOSED — 2026-10-07, noch nicht committet. Einstufung nach Detailanalyse: CONFIRMED.* Der Befund unten beschreibt den Auditstand vor der Korrektur und bleibt unverändert stehen.
+
+- **Grundlage:** schriftliche Bestätigung von DeinWackelbild zur SameView-Integration (2026-10) und deren Datenschutzerklärung. Bestätigt sind unter anderem: 24 Stunden bei nicht abgeschlossener Übergabe, 30 Tage bei abgeschlossener Bestellung, Backups nur zur Wiederherstellung, Nutzung nur für Vorschau, Produktion und Auftragsabwicklung. Dazu kommen die Google-Definitionen (answer/10787469, nachgelesen 2026-10-07) und eine Prüfung des Client-Codes.
+- **Entschieden (Data Safety):**
+  - Photos: Collected Ja, Shared Nein, nicht ephemeral, Optional, nur App functionality. Alle anderen Kategorien: nicht erhoben.
+  - Verschlüsselung bei der Übertragung: Ja.
+  - Löschung: Ja, wegen automatischer Löschung innerhalb von 90 Tagen.
+  - Die 10-%-Provision ändert „Shared: Nein“ nicht.
+  - Eingaben im Checkout (Custom Tab) werden nicht deklariert.
+  - Ecwid und der Hosting-Anbieter von DeinWackelbild ändern die Einstufung nicht.
+  - Partnerkennung, Idempotency-Key, Format, Ausrichtung, Richtung und IP-Adresse sind keine zu deklarierenden Datentypen; `locale` wird nicht gesendet.
+- **Geändert:**
+  - `sameview-website/src/pages/de/privacy/_privacy.md` und `.../en/privacy/_privacy.md`: Abschnitt 7 nennt jetzt 24 Stunden, 30 Tage, einen kurzen Backup-Hinweis und den Verweis auf DeinWackelbild; Datum aktualisiert. Interne Details von DeinWackelbild sind bewusst nicht aufgenommen.
+  - `sameview-release/04_PlayConsole/DataSafety.txt`: Antworten und Begründungen, vollständige bestätigte Angaben, offene Punkte auf Prüfungen im Live-Formular reduziert.
+  - `sameview-release/07_Review_Assets/Technical_DataSafety_Audit.md`: Addendum 2026-10-07.
+- **Nicht geändert:** App-Code, Nutzungsbedingungen DE/EN (bereits korrekt), `ReleaseChecklist.txt`.
+- **Akzeptierte Restunschärfe:** Die Dauer der Backup-Rotation bei DeinWackelbild ist nicht bekannt.
+- **Offen (manuell, außerhalb der Repositories):**
+  - Website deployen; Datenschutzerklärung und Nutzungsbedingungen DE/EN live prüfen.
+  - Play-Console-Formular gemäß `DataSafety.txt` ausfüllen und senden, spätestens mit dem ersten Build mit `INTERNET` auf irgendeinem Track; vorher den Live-Stand sichern und den Hilfetext der Löschfrage prüfen.
+  - Danach die öffentliche Data-Safety-Sektion prüfen.
+  - Bis dahin bleibt R2-H02 offen.
+- **Außerhalb von R2-H02, nicht entschieden:** DSGVO-Rolle von SameView und Rechtsgrundlage der Übertragung.
+
 - **Belege:**
   - `sameview-release/04_PlayConsole/DataSafety.txt` (Stand 2026-10) beschreibt den Soll-Zustand („Photos: Collected Yes, Shared No“), listet aber unter „OPEN ITEMS — VERIFY IN THE LIVE PLAY CONSOLE“ ausdrücklich offene Punkte. Dazu gehören „Update the form no later than the first rollout of that build on any track“, die Bewertung der 10-%-Provision im Kontext „Shared: No“ und die Löschfrage.
   - Das R1-Submission-Protokoll dokumentiert „No data types are selected … The app has no INTERNET permission“, also den Live-Stand für R1.
@@ -575,7 +599,7 @@ Mit einem **signierten Release-Build** (R8 aktiv, Produktions-Key per Env-Var) a
 
 1. **R2-B01** — versionCode erhöhen (und versionName setzen).
 2. **R2-H01** — Absicherung gegen einen Release-Build ohne Partner-Key (Build-Gate und/oder verbindlicher, verifizierter Release-Schritt); Klärung Pilot- vs. Produktions-Key. *Status 2026-10-06: Build-Gate umgesetzt und verifiziert (siehe 5.2). Die Klärung Pilot- vs. Produktions-Key bleibt offen und wird unter R2-H03 geführt.*
-3. **R2-H02** — Play Data Safety für R2 aktualisieren (inkl. der offenen Punkte in `DataSafety.txt`); Live-Stand von Privacy/Terms (EN/DE) verifizieren. *(extern)*
+3. **R2-H02** — Play Data Safety für R2 aktualisieren (inkl. der offenen Punkte in `DataSafety.txt`); Live-Stand von Privacy/Terms (EN/DE) verifizieren. *(extern)* *Status 2026-10-07: Fachfragen entschieden; Datenschutzerklärung DE/EN und Release-Referenzen aktualisiert (siehe 5.3). Website-Deploy mit Live-Prüfung und das Play-Console-Formular stehen noch aus, der Befund ist deshalb noch nicht geschlossen.*
 4. **R2-H03** — Real-Device-/Pilot-Abnahme gemäß Abschnitt 10 mit signiertem Release-Build durchführen und dokumentieren, oder Einzelpunkte explizit mit Begründung zurückstellen.
 
 **Dringend empfohlen vor Release 2** (MEDIUM, geringer Aufwand, reale Nutzerwirkung):
