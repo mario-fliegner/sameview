@@ -297,6 +297,58 @@ Anzahl nach Severity: 1 BLOCKER, 3 HIGH, 3 MEDIUM, 4 LOW, 6 INFO.
 
 #### R2-H03 — Pilot-/Real-Device-Abnahme der Integration nicht dokumentiert · HIGH · NEU
 
+*Fix-Status: CLOSED — 2026-10-15. Die Geräteabnahme mit dem signierten Release-Build 1.1 (101) und dem Produktions-Key ist bestanden; alle nicht durchgeführten Einzelprüfungen sind unten mit Begründung und Verantwortlichem zurückgestellt.* Der Befund unten beschreibt den Auditstand vor der Abnahme und bleibt unverändert stehen.
+
+- **Gerät:** Samsung Galaxy S23 (SM-S911B), Android 16, Installation per adb über Wireless Debugging. Die vorherige Debug-Installation 1.0 (100) wurde deinstalliert, nachdem ihre 2 Sessions gesichert und per SHA-256 verifiziert waren (12/12 Dateien identisch).
+- **Build:** Commit `5cbb16a`, `./gradlew clean assembleRelease bundleRelease` mit R8 und Resource Shrinking. Der Partner-Key stammt aus der lokalen, git-ignorierten Konfiguration und wurde nur als Umgebungsvariable des Build-Prozesses übergeben; der Wert ist nicht dokumentiert. Im DEX von APK und AAB ist der echte Key enthalten, kein synthetischer Rest; in Build-Log, Gradle-Reports und getrackten Dateien steht der Wert nicht.
+- **Produktions-Key:** Die Freigabe für den Produktionsbetrieb ist durch den App-Verantwortlichen bestätigt (2026-10-15). Damit ist auch die unter R2-H01 offene Klärung „Pilot- vs. Produktions-Key“ erledigt.
+- **Signatur:** Upload-Keystore `ghostshot-upload-key.jks`, Alias `ghostshot-upload` („GhostShot“ ist der Projektname vor Commit `597f8ef`). Zertifikat `CN=Mario Fliegner, OU=Mobile Development, O=IsarDomains.com`, SHA-256 `8A:53:D6:F6:0A:23:B1:C5:F7:68:FA:FD:A9:C6:23:12:05:49:C5:CC:0A:06:2F:23:DA:AC:BA:D3:A9:6D:E4:5F`, identisch mit dem Signer des archivierten R1-AAB. APK signiert mit `apksigner` (Schema v3), AAB mit `jarsigner`, beide verifiziert. Der Play App Signing Key ist nicht beteiligt; er liegt nur bei Google und signiert die an Nutzer ausgelieferten APKs.
+- **Prüfung am Gerät:** `com.isardomains.sameview`, versionCode 101, versionName 1.1, nicht debuggable (`run-as` scheitert); die installierte APK ist byte-identisch mit dem Kandidaten. Kaltstart ohne Absturz, beim Start keine TCP-Verbindungen der App.
+- **Archivierte Artefakte** (außerhalb aller Git-Repositories, `C:\data\work\privat\sameview-release-artifacts\v1.1.0-101_R2_2026-10-15\`, mit `SHA256SUMS.txt` und `BUILD_INFO.txt`):
+
+  | Datei | SHA-256 | Zweck |
+  |---|---|---|
+  | `app-release-signed.aab` | `75ee999c9a592e62ddcbfa569684245fe33bab66f58eb541d2ced8645178d8b4` | Upload-Kandidat für Google Play |
+  | `app-release-signed.apk` | `05f2f1517b1f6071e0e42418a53b97a045c1f527aa2180504f075d65bc5840c8` | Geräteabnahme (derselbe Build) |
+  | `mapping.txt` | `22309f1db59eed4ece38075eef30d9c13d2c94b85a260285ef2e18a67e0c1eee` | R8-Mapping dieses Builds |
+
+- **Manuelle Tests am Gerät (alle bestanden):**
+
+  | Test | Bezug |
+  |---|---|
+  | Übertragung an den echten Endpunkt bis zum DeinWackelbild-Konfigurator; Portrait-Session 9:16 → Druckformat `10x15`, Datum aktiviert; Bildausschnitt, Druckformat und Datum im Konfigurator korrekt. Der Partner-Handoff ist damit nachgewiesen; ein Checkout wurde **nicht** abgeschlossen, es gibt keine echte Bestellung. | Abschnitt 10 Nr. 1 und 2 (Portrait, Datum an); Plan §26 Nr. 2 |
+  | Rückkehr aus dem Custom Tab in die App | Abschnitt 10 Nr. 8 |
+  | Flugmodus **vor** dem Start der Übertragung: Netzwerkfehler, danach erfolgreicher erneuter Versuch nach Wiederherstellung der Verbindung | Abschnitt 10 Nr. 6 (nur der Teil vor dem CTA) |
+  | Abbruch während der Übertragung ohne Fehlermeldung und ohne Absturz | Abschnitt 10 Nr. 5; Gerätenachweis für R2-M01 |
+  | Kern-Regression im Release-Build: Kamera mit Referenz-Overlay, Vergleich, Session speichern und bearbeiten, Bild teilen, Video-Export, Session-Backup-Export | Abschnitt 10 Nr. 14 |
+  | About-Screen zeigt „Version 1.1 (101)“, DE und EN | R2-B01 |
+
+- **Automatisierte Tests auf `5cbb16a` (Managed Devices, Debug):**
+
+  | Lauf | Ergebnis |
+  |---|---|
+  | `./gradlew pixel2Api36DebugAndroidTest --continue` | BUILD SUCCESSFUL; 1113/1113 bestanden, 0 übersprungen |
+  | `./gradlew pixel2Api29DebugAndroidTest --continue` | **BUILD FAILED**; 1112/1113 bestanden, 1 fehlgeschlagen, 0 übersprungen. Fehlgeschlagen: `CompareScreenTest.originalPeek_staysViewportSizedWhenReferenceRevealIsSmall` — `AssertionError: expected:<51.809525> but was:<41.52381>` in `assertRectEquals` (Zeile 284) |
+  | `./gradlew pixel2Api29DebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=com.isardomains.sameview.ui.compare.CompareScreenTest` (isolierte Wiederholung) | BUILD SUCCESSFUL; 113/113 bestanden, einschließlich des zuvor fehlgeschlagenen Tests |
+
+  Einordnung des API-29-Fehlers: Timing-Flake der Testsuite, keine Produkt-Regression. Es sind exakt dieselben Werte und dasselbe Muster wie beim Flake in 9.1 (zwei Bounds werden nacheinander gelesen, während sich das Layout nach dem Laden noch setzt). Test und `CompareScreen` sind seit 2026-09-11 unverändert; R2-M01, R2-M02 und R2-B01 berühren diesen Code nicht. Der Test wurde weder deaktiviert noch angepasst. Der Gesamtlauf auf API 29 ist damit **nicht** grün; grün ist nur die isolierte Wiederholung der Klasse. Aus der R2-B01-Verifikation (5.1) kommen 1232 Unit-Tests (0 Fehler) sowie `lintDebug`/`lintRelease` mit 0 Errors hinzu.
+- **Ausdrücklich zurückgestellt:**
+
+  | Prüfung | Begründung | Verantwortlich |
+  |---|---|---|
+  | Landscape 16:9 → `10x15`, 3:4 → `15x20`, Session ohne Viewport-Metadaten, Datum aus (Abschnitt 10 Nr. 2/3, Plan §26 Nr. 1) | Nur Portrait 9:16 mit Datum wurde manuell getestet. Crop, Formatwahl und Handoff laufen für alle Formate durch denselben Code und sind für 9:16, 16:9 und 3:4 per Unit- und Instrumented-Tests abgedeckt. | App-Verantwortlicher |
+  | Fallback-Dialog „Originalqualität nicht verfügbar“ (Abschnitt 10 Nr. 4) | Im nicht-debuggable Release-Build nicht herbeiführbar; alle drei Fallback-Zweige sind per Instrumented-Test abgedeckt | Entwicklung |
+  | `cacheDir/wackelbild/` nach Abschluss leer (Abschnitt 10 Nr. 5) | Im Release-Build nicht einsehbar; dreistufiger Cleanup mit Tests abgesichert | Entwicklung |
+  | Home während des Uploads, Prozess-Tod, erneute Bestellung, Rückkehr aus einer anderen App (Abschnitt 10 Nr. 8–10) | Durch das Design (kein Hintergrund-Upload, kein Auto-Resume) und die ViewModel-Lifecycle-Tests abgedeckt; geringes Risiko | Entwicklung (Smoke-Test nach Release 2) |
+  | Verbindungsabbruch während des Uploads, gedrosseltes Netz, Messung von Upload-Dauer und Dateigrößen (Abschnitt 10 Nr. 6, R2-L03) | Nicht getestet. Die Fehlerklassifikation ist per Test belegt; die Messung ist laut Abschnitt 12 nur Entscheidungsgrundlage für R2-L03 | Entwicklung (nach Release 2) |
+  | StrictMode-Beobachtung während einer echten Bestellung (Abschnitt 10 Nr. 7, R2-M02) | Der Fix ist per Test belegt; bei den Live-Läufen gab es weder ANR noch Absturz | Entwicklung |
+  | Low-RAM-Gerät mit API 29/30, großes Referenzbild (Abschnitt 10 Nr. 12) | Kein physisches Gerät verfügbar; API 29 ist über Managed Devices abgedeckt (siehe oben, einschließlich Flake) | Entwicklung |
+  | Visuelles Feintuning von Tilt-Blend, Ridges und Perspektive (Abschnitt 10 Nr. 13, Plan §25) | Subjektive Abstimmung, bereits in eigenen Iterationen erfolgt; kein Funktionsrisiko | App-Verantwortlicher |
+  | Partner-Prüfungen nach Spec §51 / Plan §26 Nr. 3–9 (Idempotenz bei Verbindungsabbruch, 413, 415, abgelaufene Handoffs, Partner-ID `sameview` in einer Testbestellung, E-Mail/Rechnung ohne Tokens, abgeschlossener Checkout) (Abschnitt 10 Nr. 15) | Nur serverseitig bzw. mit einer abgeschlossenen Testbestellung prüfbar; die SameView-Seite ist per Tests abgedeckt | DeinWackelbild |
+  | EXIF-/GPS-Stichprobe der beim Partner angekommenen Bilder (Abschnitt 10 Nr. 11) | Metadatenfreie Transfer-JPEGs sind per Instrumented-Test belegt | DeinWackelbild (optional) |
+
+- **Nicht Teil dieser Abnahme, weiterhin offen:** R2-L02 (`locale` wird nicht gesendet). Die Produktentscheidung dazu ist **nicht** getroffen und hier nicht dokumentiert; der Punkt bleibt eine offene Entscheidung des App-Verantwortlichen (siehe Abschnitt 12).
+
 - **Belege:**
   - `IMPLEMENTATION_NOTES.md` (Block 11, Handoff-Konfiguration 2026-09-21) listet als „Remaining“ unter anderem:
     - Real-Device-Pilot (Portrait/Landscape, Datum an/aus, Fallback-Pfad, EXIF/GPS-Stichprobe, Abbruch während Transfer, Temp-Cleanup, große Sessions)
@@ -621,7 +673,7 @@ Mit einem **signierten Release-Build** (R8 aktiv, Produktions-Key per Env-Var) a
 1. **R2-B01** — versionCode erhöhen (und versionName setzen). *Status 2026-10-15: im Repository behoben, `versionCode = 101`, `versionName = "1.1"`, verifiziert (siehe 5.1); Upload steht noch aus.*
 2. **R2-H01** — Absicherung gegen einen Release-Build ohne Partner-Key (Build-Gate und/oder verbindlicher, verifizierter Release-Schritt); Klärung Pilot- vs. Produktions-Key. *Status 2026-10-06: Build-Gate umgesetzt und verifiziert (siehe 5.2). Die Klärung Pilot- vs. Produktions-Key bleibt offen und wird unter R2-H03 geführt.*
 3. **R2-H02** — Play Data Safety für R2 aktualisieren (inkl. der offenen Punkte in `DataSafety.txt`); Live-Stand von Privacy/Terms (EN/DE) verifizieren. *(extern)* *Status 2026-10-07: Fachfragen entschieden; Datenschutzerklärung DE/EN und Release-Referenzen aktualisiert (siehe 5.3). Website-Deploy mit Live-Prüfung und das Play-Console-Formular stehen noch aus, der Befund ist deshalb noch nicht geschlossen.* *Status 2026-10-13: geschlossen; Website live, Formular eingereicht, genehmigt und veröffentlicht, öffentliche Data-Safety-Sektion geprüft (siehe 5.3).*
-4. **R2-H03** — Real-Device-/Pilot-Abnahme gemäß Abschnitt 10 mit signiertem Release-Build durchführen und dokumentieren, oder Einzelpunkte explizit mit Begründung zurückstellen.
+4. **R2-H03** — Real-Device-/Pilot-Abnahme gemäß Abschnitt 10 mit signiertem Release-Build durchführen und dokumentieren, oder Einzelpunkte explizit mit Begründung zurückstellen. *Status 2026-10-15: abgeschlossen; Geräteabnahme mit signiertem Release-Build 1.1 (101) und Produktions-Key bestanden, offene Einzelpunkte mit Begründung und Verantwortlichem zurückgestellt (siehe 5.4).*
 
 **Dringend empfohlen vor Release 2** (MEDIUM, geringer Aufwand, reale Nutzerwirkung):
 
@@ -641,6 +693,7 @@ Mit einem **signierten Release-Build** (R8 aktiv, Produktions-Key per Env-Var) a
 | R2-L04 `compress()`-Ergebnis | Randfall (Speicher voll) |
 | R2-I01…I06 | Hygiene/Information |
 | Flake `CompareScreenTest.compareScreen_bothImagesUseSameViewportSurface` | Test-Stabilität, keine Produkt-Regression (siehe 9.1) |
+| Flake `CompareScreenTest.originalPeek_staysViewportSizedWhenReferenceRevealIsSmall` (API 29) | Test-Stabilität, keine Produkt-Regression; gleiches Muster wie 9.1, isolierte Wiederholung 113/113 grün (siehe 5.4) |
 | V1 A-02/A-03 (Slider/Overlay-A11y) | Vorbestehend, als Known Limitation kommuniziert |
 | V2 Guide-Tip-Live-Region, GPS-Toggle-Beschreibung | Vorbestehend, keine Regression |
 | V1 P-04, S-03 | Vorbestehend, LOW |
