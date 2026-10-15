@@ -164,6 +164,24 @@ Anzahl nach Severity: 1 BLOCKER, 3 HIGH, 3 MEDIUM, 4 LOW, 6 INFO.
 
 #### R2-B01 — versionCode/versionName nicht erhöht · BLOCKER · WIEDER (V1 R-04)
 
+*Fix-Status: CLOSED im Repository — 2026-10-15, noch nicht committet. Der Upload in die Play Console steht noch aus.* Der Befund unten beschreibt den Auditstand vor dem Fix und bleibt unverändert stehen.
+
+- **Umsetzung:** `app/build.gradle.kts`, `defaultConfig`: `versionCode = 101`, `versionName = "1.1"` (Produktentscheidung statt des unten beispielhaft genannten 2xx-Schemas; Play verlangt nur einen Wert > 100). Sonst keine Änderung, insbesondere nicht an `applicationId`, Signierung oder Berechtigungen.
+- **Versionsanzeige:** `AboutScreen` liest `BuildConfig.VERSION_NAME`/`VERSION_CODE` und zeigt über `about_version` (`Version %1$s (%2$d)`, EN/DE) jetzt automatisch „Version 1.1 (101)“. Keine UI- oder String-Änderung nötig. `ABOUT_SCREEN.md` §9 („Version 1.0 (1)“) ist nur ein Formatbeispiel; die verbindliche Quelle `BuildConfig` ist erfüllt.
+- **Verifikation:**
+
+  | Lauf | Ergebnis |
+  |---|---|
+  | `./gradlew testDebugUnitTest lintDebug assembleDebug --rerun-tasks --continue` (ohne Partner-Key) | BUILD SUCCESSFUL; 1232 Unit-Tests, 0 Fehler, 0 übersprungen; `lintDebug` 0 Errors, 117 Warnings, 6 Hints (unverändert) |
+  | Debug-`BuildConfig` / Debug-APK (`aapt2 dump badging`) | `VERSION_CODE = 101`, `VERSION_NAME = "1.1"`; `package='com.isardomains.sameview' versionCode='101' versionName='1.1'` |
+  | `./gradlew lintRelease assembleRelease bundleRelease --continue` mit synthetischem Partner-Key | BUILD SUCCESSFUL (R8 + Resource Shrinking); `lintRelease` 0 Errors, 116 Warnings, 6 Hints (unverändert) |
+  | Release-APK (`aapt2 dump badging`) | `package='com.isardomains.sameview' versionCode='101' versionName='1.1'`, targetSdk 36; Permissions CAMERA, ACCESS_FINE/COARSE/MEDIA_LOCATION, INTERNET, ACCESS_NETWORK_STATE, DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION (unverändert gegenüber Abschnitt 8) |
+  | Release-AAB (`base/manifest/AndroidManifest.xml`) | `versionCode` 101, `versionName` 1.1, Package `com.isardomains.sameview`; kein Rest von 100 |
+
+- **Synthetische Artefakte:** Der Release-Build enthält einen synthetischen Key und ist unsigniert. Die Artefakte wurden in `app/build/outputs/{apk,bundle}/release/` in `*.SYNTHETIC-KEY-NOT-FOR-PUBLICATION.*` umbenannt und mit `NOT_FOR_PUBLICATION.txt` gekennzeichnet. Sie sind weder für den Upload noch für die R2-H03-Abnahme verwendbar.
+- **Upgrade:** 101 > 100 bei unveränderter `applicationId` und unveränderter Signierung (Play App Signing); ein Update von R1 ist damit grundsätzlich möglich. Ein tatsächliches Update von der Play-Version ist erst über einen Play-Track nachweisbar.
+- **Offen:** Sichtprüfung „Version 1.1 (101)“ im About-Screen auf einem echten Gerät (Teil der R2-H03-Abnahme); signierter Release-Build mit echtem Key; Upload. Die internen Release-Notes in `sameview-release` (noch 1.0/100) gehören zu R2-I03.
+
 - **Datei:** `app/build.gradle.kts`, `defaultConfig { versionCode = 100; versionName = "1.0" }`
 - **Befund:** Werte sind seit R1 unverändert (`git diff v1.0.100-rc HEAD -- app/build.gradle.kts` enthält keine Versionsänderung). Das gemergte Release-Manifest des lokal gebauten AAB trägt `versionCode="100" versionName="1.0"`.
 - **Failure Path:** Upload des R2-AAB in die Play Console → Ablehnung, weil versionCode 100 bereits verwendet wurde. Selbst bei einem anderen Track ist kein Rollout möglich. Nutzer würden außerdem in About/Systeminfo weiterhin „1.0“ sehen.
@@ -600,7 +618,7 @@ Mit einem **signierten Release-Build** (R8 aktiv, Produktions-Key per Env-Var) a
 
 ## 11 — Muss vor Release 2 behoben werden
 
-1. **R2-B01** — versionCode erhöhen (und versionName setzen).
+1. **R2-B01** — versionCode erhöhen (und versionName setzen). *Status 2026-10-15: im Repository behoben, `versionCode = 101`, `versionName = "1.1"`, verifiziert (siehe 5.1); Upload steht noch aus.*
 2. **R2-H01** — Absicherung gegen einen Release-Build ohne Partner-Key (Build-Gate und/oder verbindlicher, verifizierter Release-Schritt); Klärung Pilot- vs. Produktions-Key. *Status 2026-10-06: Build-Gate umgesetzt und verifiziert (siehe 5.2). Die Klärung Pilot- vs. Produktions-Key bleibt offen und wird unter R2-H03 geführt.*
 3. **R2-H02** — Play Data Safety für R2 aktualisieren (inkl. der offenen Punkte in `DataSafety.txt`); Live-Stand von Privacy/Terms (EN/DE) verifizieren. *(extern)* *Status 2026-10-07: Fachfragen entschieden; Datenschutzerklärung DE/EN und Release-Referenzen aktualisiert (siehe 5.3). Website-Deploy mit Live-Prüfung und das Play-Console-Formular stehen noch aus, der Befund ist deshalb noch nicht geschlossen.* *Status 2026-10-13: geschlossen; Website live, Formular eingereicht, genehmigt und veröffentlicht, öffentliche Data-Safety-Sektion geprüft (siehe 5.3).*
 4. **R2-H03** — Real-Device-/Pilot-Abnahme gemäß Abschnitt 10 mit signiertem Release-Build durchführen und dokumentieren, oder Einzelpunkte explizit mit Begründung zurückstellen.
